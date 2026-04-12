@@ -1,0 +1,22 @@
+[project]
+name = "fambot-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "pandas>=3.0.2",
+    "scikit-learn>=1.8.0",
+    "xgboost>=3.2.0",
+]
+
+[project.scripts]
+model = "model:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["model"]
