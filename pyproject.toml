@@ -9,14 +9,24 @@ dependencies = [
     "pandas>=3.0.2",
     "scikit-learn>=1.8.0",
     "xgboost>=3.2.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "firebase-admin>=6.5.0",
+    "pydantic>=2.10.0",
+    "joblib>=1.4.0",
 ]
 
 [project.scripts]
 model = "model:main"
+api = "fambot_backend.app:run"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fambot_backend*"]
 
 [tool.setuptools]
 py-modules = ["model"]
