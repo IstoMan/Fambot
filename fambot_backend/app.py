@@ -17,6 +17,7 @@ from fambot_backend.schemas import (
     LoginIn,
     OnboardingIn,
     OnboardingOut,
+    RiskOut,
     SignupIn,
     TokenOut,
     UserProfileOut,
@@ -102,6 +103,21 @@ def auth_login(body: LoginIn) -> TokenOut:
 @app.get("/v1/me", response_model=UserProfileOut)
 def read_me(uid: str = Depends(firebase_uid)) -> UserProfileOut:
     return get_user_profile(uid)
+
+
+@app.get("/v1/me/risk", response_model=RiskOut)
+def read_me_risk(uid: str = Depends(firebase_uid)) -> RiskOut:
+    profile = get_user_profile(uid)
+    if (
+        not profile.onboarding_complete
+        or profile.risk_score is None
+        or profile.risk_class is None
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Risk score not available; complete onboarding first.",
+        )
+    return RiskOut(risk_score=profile.risk_score, risk_class=profile.risk_class)
 
 
 @app.put("/v1/me/onboarding", response_model=OnboardingOut)

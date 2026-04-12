@@ -11,6 +11,7 @@ This repository is both a **batch training script** (builds `diabetes_model.pkl`
 - **Health check** for load balancers and uptime checks.
 - **Signup and login** (`POST /v1/auth/signup`, `POST /v1/auth/login`) returning JWT access tokens; Firebase holds the canonical email/password user, Firestore stores profile data by `uid`.
 - **Authenticated user profile** (`GET /v1/me`) backed by Firestore document `users/{uid}`.
+- **Stored risk score** (`GET /v1/me/risk`) returning the persisted `risk_score` and `risk_class` from the last successful onboarding (no model inference on read).
 - **Onboarding completion** (`PUT /v1/me/onboarding`) that:
   - Validates body fields with Pydantic.
   - Computes BMI from height and weight.
@@ -148,6 +149,16 @@ Verifies credentials with the Identity Toolkit API (`FIREBASE_WEB_API_KEY` requi
 Returns the current user’s profile from Firestore, or an empty-ish profile if the document does not exist.
 
 **Errors:** `401` if the `Authorization` header is missing or the JWT is invalid/expired; `500` if `FAMBOT_JWT_SECRET` is not set (server cannot verify tokens).
+
+### `GET /v1/me/risk`
+
+**Auth:** Same as `GET /v1/me` (`Authorization: Bearer <JWT access token>`).
+
+Returns the **stored** diabetes risk from Firestore (`riskScore` / `riskClass` written when onboarding completed). Does not run the ML model.
+
+**Response** (`RiskOut`): `risk_score` (0–100) and `risk_class` (`low` \| `moderate` \| `high`).
+
+**Errors:** Same authentication errors as `GET /v1/me`. **`404`** if onboarding is not complete or stored risk fields are missing (e.g. new user or incomplete document).
 
 ### `PUT /v1/me/onboarding`
 

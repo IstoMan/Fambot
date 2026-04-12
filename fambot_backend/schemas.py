@@ -64,3 +64,10 @@ class OnboardingOut(BaseModel):
     profile: UserProfileOut
     risk_score: float
     risk_class: Literal["low", "moderate", "high"]
+
+
+class RiskOut(BaseModel):
+    """Stored diabetes risk from the last successful onboarding (Firestore)."""
+
+    risk_score: float
+    risk_class: Literal["low", "moderate", "high"]
