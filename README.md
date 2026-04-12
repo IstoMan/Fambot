@@ -1,6 +1,8 @@
+<<<<<<< Updated upstream
+=======
 # Fambot Backend
 
-HTTP API for user onboarding and **diabetes risk scoring** using a trained scikit-learn / XGBoost pipeline. Authentication is **Firebase ID tokens**; profiles are stored in **Cloud Firestore**.
+HTTP API for user onboarding and **diabetes risk scoring** using a trained scikit-learn / XGBoost pipeline. Clients authenticate with **JWT access tokens** issued by this API after **email/password signup and login**; accounts live in **Firebase Authentication** (server-side Admin SDK + Identity Toolkit), and profiles are stored in **Cloud Firestore**.
 
 This repository is both a **batch training script** (builds `diabetes_model.pkl` from the Pima Indians diabetes dataset) and a **FastAPI** service that serves predictions and persists onboarding data.
 
@@ -9,6 +11,7 @@ This repository is both a **batch training script** (builds `diabetes_model.pkl`
 ## Features
 
 - **Health check** for load balancers and uptime checks.
+- **Signup and login** (`POST /v1/auth/signup`, `POST /v1/auth/login`) returning JWT access tokens; Firebase holds the canonical email/password user, Firestore stores profile data by `uid`.
 - **Authenticated user profile** (`GET /v1/me`) backed by Firestore document `users/{uid}`.
 - **Onboarding completion** (`PUT /v1/me/onboarding`) that:
   - Validates body fields with Pydantic.
@@ -25,7 +28,9 @@ This repository is both a **batch training script** (builds `diabetes_model.pkl`
 - For production-like runs: a **Google Cloud / Firebase** project with:
   - **Application Default Credentials** (ADC), or `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account JSON file.
   - **Firestore** enabled.
-  - **Firebase Authentication** if clients send real ID tokens.
+  - **Firebase Authentication** (Email/Password sign-in enabled) for signup/login.
+  - A **Web API key** for the Identity Toolkit REST API (used server-side for login only; see `FIREBASE_WEB_API_KEY`).
+  - A strong **`FAMBOT_JWT_SECRET`** for signing and verifying access tokens.
 
 ---
 
@@ -36,7 +41,9 @@ This repository is both a **batch training script** (builds `diabetes_model.pkl`
 | [`fambot_backend/app.py`](fambot_backend/app.py) | FastAPI app, routes, CORS, `run()` for Uvicorn. |
 | [`fambot_backend/schemas.py`](fambot_backend/schemas.py) | Pydantic request/response models. |
 | [`fambot_backend/inference.py`](fambot_backend/inference.py) | Model load, BMI, feature row construction, `predict_risk`. |
-| [`fambot_backend/deps.py`](fambot_backend/deps.py) | Firebase ID token verification → `uid`. |
+| [`fambot_backend/deps.py`](fambot_backend/deps.py) | JWT Bearer verification → `uid`. |
+| [`fambot_backend/jwt_tokens.py`](fambot_backend/jwt_tokens.py) | Mint and verify HS256 access tokens. |
+| [`fambot_backend/identity_toolkit.py`](fambot_backend/identity_toolkit.py) | Identity Toolkit `signInWithPassword` (login). |
 | [`fambot_backend/firebase_init.py`](fambot_backend/firebase_init.py) | One-time `firebase_admin` initialization (ADC). |
 | [`fambot_backend/firestore_users.py`](fambot_backend/firestore_users.py) | Firestore read/write for `users` collection. |
 | [`model.py`](model.py) | Training: logistic regression vs XGBoost, saves `diabetes_model.pkl` and `feature_importance.png`. |
@@ -104,8 +111,11 @@ Interactive docs (when the server is up):
 | `GOOGLE_CLOUD_PROJECT` | Alternative to `FIREBASE_PROJECT_ID` for the same purpose. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON for ADC (typical for local dev). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated list of allowed origins for CORS. Default `*` (single origin string `*` in the list). Strip whitespace around entries. |
-| `FAMBOT_SKIP_AUTH` | Set to `1` to **skip Firebase token verification** (local only; **never** in production). Uses `FAMBOT_DEV_UID` as the fake `uid` (default `dev-user`). |
+| `FAMBOT_SKIP_AUTH` | Set to `1` to **skip JWT verification** (local only; **never** in production). Uses `FAMBOT_DEV_UID` as the fake `uid` (default `dev-user`). |
 | `FAMBOT_SKIP_FIRESTORE` | Set to `1` to skip Firestore reads/writes (returns synthetic profile data for onboarding). |
+| `FAMBOT_JWT_SECRET` | Secret for signing and verifying JWT access tokens (required when auth is not skipped). |
+| `FAMBOT_JWT_EXPIRES_SECONDS` | Access token lifetime in seconds (default `3600`; minimum `60`). |
+| `FIREBASE_WEB_API_KEY` | Firebase **Web API key** (Identity Toolkit) for `POST /v1/auth/login` only; not a substitute for ADC. |
 | `MPLBACKEND` | Used by `model.py` for matplotlib (default `Agg` if unset). |
 
 ---
@@ -116,15 +126,31 @@ Interactive docs (when the server is up):
 
 No authentication. Returns `{"status": "ok"}`.
 
+### `POST /v1/auth/signup`
+
+No authentication. **JSON body:** `email`, `password` (minimum length 6 per Firebase).
+
+Creates a Firebase Auth user via the Admin SDK, ensures a minimal Firestore `users/{uid}` document when Firestore is enabled, and returns a **JWT access token** plus `uid`, `email`, `expires_in`, and `token_type`.
+
+**Errors:** `409` if the email is already registered; `400` for invalid Firebase user creation; `500` if `FAMBOT_JWT_SECRET` is not set.
+
+### `POST /v1/auth/login`
+
+No authentication. **JSON body:** `email`, `password`.
+
+Verifies credentials with the Identity Toolkit API (`FIREBASE_WEB_API_KEY` required) and returns the same token shape as signup.
+
+**Errors:** `401` for invalid credentials; `403` if the account is disabled; `500` if `FAMBOT_JWT_SECRET` or `FIREBASE_WEB_API_KEY` is missing.
+
 ### `GET /v1/me`
 
-**Auth:** `Authorization: Bearer <Firebase ID token>`
+**Auth:** `Authorization: Bearer <JWT access token>`
 
 Returns the current user’s profile from Firestore, or an empty-ish profile if the document does not exist.
 
 ### `PUT /v1/me/onboarding`
 
-**Auth:** Same as above.
+**Auth:** Same as above (`Bearer` JWT).
 
 **JSON body** (`OnboardingIn`):
 
@@ -187,6 +213,7 @@ The loaded object must be a sklearn estimator with `predict_proba` when possible
 ## Security notes
 
 - Production deployments must **not** set `FAMBOT_SKIP_AUTH=1`.
+- Keep **`FAMBOT_JWT_SECRET`** long, random, and private; rotate by invalidating old tokens (short `FAMBOT_JWT_EXPIRES_SECONDS` helps).
 - Use **HTTPS** in front of the API; protect service account keys and rotate them.
 - Firestore **security rules** must restrict `users/{uid}` so clients can only access their own document if clients talk to Firestore directly; this API uses the **Admin SDK** server-side, so rules do not apply to the backend process—protect the backend credentials instead.
 
@@ -201,3 +228,4 @@ The model is trained on **historical tabular data** for research and engineering
 ## License / project metadata
 
 See `pyproject.toml` for package name and version. Add a license file if you distribute this code.
+>>>>>>> Stashed changes
