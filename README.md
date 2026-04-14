@@ -59,9 +59,11 @@ This repository is both a **batch training script** (builds `diabetes_model.pkl`
 ```bash
 cd fambot-backend
 uv sync
+cp .env.example .env
+# Edit `.env`: set Firebase project ID, Web API key, path to `firebase-admin.json`, and `FAMBOT_JWT_SECRET`.
 ```
 
-Installs the package and dependencies from `pyproject.toml`.
+Installs the package and dependencies from `pyproject.toml`. At runtime, [`fambot_backend/app.py`](fambot_backend/app.py) loads variables from a **`.env`** file in the project root (via `python-dotenv`) if present.
 
 ---
 

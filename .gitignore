@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Local secrets (copy from .env.example)
+.env
+
 # Virtual environments
 .venv
 

@@ -9,6 +9,7 @@ Instructions for AI coding agents and human contributors working in this reposit
 Whenever you add or materially change a **feature** (new or altered endpoints, environment variables, authentication, request/response shapes, Firestore fields, or training/inference contracts), **update the docs in the same effort**:
 
 - **[`README.md`](README.md)** — user-facing overview, env reference, and API reference.
+- **[`.env.example`](.env.example)** — template for local configuration; copy to **`.env`** (gitignored). The app loads `.env` at import time via `python-dotenv` in [`fambot_backend/app.py`](fambot_backend/app.py).
 - **This file (`AGENTS.md`)** — when conventions, directory layout, auth flow, or “what to edit for task X” guidance changes.
 
 The repository should remain the **source of truth**; avoid shipping behavior without documenting it.
@@ -144,6 +145,7 @@ If you change preprocessing in `model.py`, mirror any assumptions used at infere
 
 `.gitignore` excludes:
 
+- `.env` (local secrets)
 - `.venv`
 - `diabetes_model.pkl`
 - `feature_importance.png`
