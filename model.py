@@ -35,6 +35,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
+from fambot_backend.cardio_features import BASE_FEATURES, FEATURE_ORDER
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
 _ROOT = Path(__file__).resolve().parent
@@ -43,23 +45,6 @@ _MODEL_PATH = _ROOT / "cardiovascular_model.pkl"
 _THRESHOLD_PATH = _ROOT / "cardiovascular_model.threshold.json"
 _PLOT_PATH = _ROOT / "feature_importance.png"
 
-# Raw + engineered features (derived columns added in _clean_cardio_xy after row filtering)
-_BASE_FEATURES: list[str] = [
-    "age_years",
-    "gender",
-    "height",
-    "weight",
-    "ap_hi",
-    "ap_lo",
-    "cholesterol",
-    "gluc",
-    "smoke",
-    "alco",
-    "active",
-]
-_DERIVED_FEATURES: list[str] = ["bmi", "pulse_pressure", "map_approx"]
-_FEATURE_COLUMNS: list[str] = _BASE_FEATURES + _DERIVED_FEATURES
-
 
 def _clean_cardio_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     """Load target and features; engineer age_years and derived vitals; filter bad rows."""
@@ -67,7 +52,7 @@ def _clean_cardio_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     X = df.drop(columns=["cardio"]).copy()
     X["age_years"] = X["age"].astype(float) / 365.25
     X = X.drop(columns=["age"])
-    X = X[_BASE_FEATURES]
+    X = X[BASE_FEATURES]
 
     ok = (
         (X["ap_hi"] > X["ap_lo"])
@@ -88,7 +73,7 @@ def _clean_cardio_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     X["pulse_pressure"] = X["ap_hi"].astype(float) - X["ap_lo"].astype(float)
     X["map_approx"] = (X["ap_hi"].astype(float) + 2.0 * X["ap_lo"].astype(float)) / 3.0
 
-    X = X[_FEATURE_COLUMNS]
+    X = X[FEATURE_ORDER]
     return X, y
 
 
