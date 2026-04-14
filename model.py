@@ -11,7 +11,6 @@ matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -35,61 +34,64 @@ from xgboost import XGBClassifier
 warnings.filterwarnings("ignore", category=UserWarning)
 
 _ROOT = Path(__file__).resolve().parent
-_DATA_CSV = _ROOT / "sources" / "diabetes.csv"
-_MODEL_PATH = _ROOT / "diabetes_model.pkl"
+_DATA_CSV = _ROOT / "sources" / "cardio_train.csv"
+_MODEL_PATH = _ROOT / "cardiovascular_model.pkl"
 _PLOT_PATH = _ROOT / "feature_importance.png"
 
-# Columns where 0 is invalid (Pima Indians heuristic)
-_ZERO_INVALID_COLS = ["Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI"]
+# Feature column order after engineering (age -> age_years)
+_FEATURE_COLUMNS: list[str] = [
+    "age_years",
+    "gender",
+    "height",
+    "weight",
+    "ap_hi",
+    "ap_lo",
+    "cholesterol",
+    "gluc",
+    "smoke",
+    "alco",
+    "active",
+]
 
 
-class ZeroToNaNTransformer(BaseEstimator, TransformerMixin):
-    """Replace zeros with NaN for the selected medical columns (invalid sentinel)."""
+def _clean_cardio_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """Load target and features; engineer age_years; drop inconsistent / extreme rows."""
+    y = df["cardio"].astype(int)
+    X = df.drop(columns=["cardio"]).copy()
+    X["age_years"] = X["age"].astype(float) / 365.25
+    X = X.drop(columns=["age"])
+    X = X[_FEATURE_COLUMNS]
 
-    def __init__(self, columns: list[str]):
-        self.columns = columns
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        if hasattr(X, "copy"):
-            out = X.copy()
-            for col in self.columns:
-                if col in out.columns:
-                    out[col] = out[col].replace(0, np.nan)
-            return out
-        arr = np.asarray(X, dtype=float).copy()
-        arr[arr == 0] = np.nan
-        return arr
+    # Systolic must exceed diastolic; drop impossible vitals (common cardio_train cleanup)
+    ok = (
+        (X["ap_hi"] > X["ap_lo"])
+        & (X["ap_hi"] >= 80)
+        & (X["ap_hi"] <= 250)
+        & (X["ap_lo"] >= 40)
+        & (X["ap_lo"] <= 150)
+        & (X["height"] >= 120)
+        & (X["height"] <= 220)
+        & (X["weight"] >= 35)
+        & (X["weight"] <= 250)
+    )
+    X = X.loc[ok].reset_index(drop=True)
+    y = y.loc[ok].reset_index(drop=True)
+    return X, y
 
 
 def _feature_names_in_order(X: pd.DataFrame) -> list[str]:
-    """Match ColumnTransformer output order: imputed medical cols, then passthrough rest."""
-    zero_cols = [c for c in _ZERO_INVALID_COLS if c in X.columns]
-    other_cols = [c for c in X.columns if c not in zero_cols]
-    return zero_cols + other_cols
+    """Column order matches ColumnTransformer (single block, median imputation)."""
+    return list(X.columns)
 
 
 def _build_preprocess(X: pd.DataFrame) -> ColumnTransformer:
-    zero_cols = [c for c in _ZERO_INVALID_COLS if c in X.columns]
-    other_cols = [c for c in X.columns if c not in zero_cols]
-    transformers = [
-        (
-            "medical",
-            Pipeline(
-                [
-                    ("z2n", ZeroToNaNTransformer(zero_cols)),
-                    ("imp", SimpleImputer(strategy="median")),
-                ]
-            ),
-            zero_cols,
-        ),
-    ]
-    if other_cols:
-        transformers.append(("rest", "passthrough", other_cols))
+    cols = list(X.columns)
     return ColumnTransformer(
-        transformers, remainder="drop", verbose_feature_names_out=False
+        [
+            ("num", SimpleImputer(strategy="median"), cols),
+        ],
+        remainder="drop",
+        verbose_feature_names_out=False,
     )
 
 
@@ -97,13 +99,15 @@ def main() -> None:
     # =========================
     # 2. LOAD DATA
     # =========================
-    df = pd.read_csv(_DATA_CSV)
+    raw = pd.read_csv(_DATA_CSV, sep=";")
+    print("Initial shape:", raw.shape)
+    print(raw.head())
 
-    print("Initial shape:", df.shape)
-    print(df.head())
+    df = raw.drop(columns=["id"], errors="ignore")
+    X, y = _clean_cardio_xy(df)
 
-    X = df.drop("Outcome", axis=1)
-    y = df["Outcome"]
+    print(f"\nAfter cleaning: X={X.shape}, y={y.shape}")
+    print(X.head())
 
     preprocess = _build_preprocess(X)
 
