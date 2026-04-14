@@ -6,7 +6,8 @@ services:
     runtime: python
     plan: free
     region: oregon
-    buildCommand: uv sync && uv run model
+    # Install deps only; ship a pre-trained cardiovascular_model.pkl in the repo (do not train here).
+    buildCommand: uv sync
     startCommand: bash scripts/render_start.sh
     healthCheckPath: /health
     envVars:

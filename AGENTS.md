@@ -148,12 +148,11 @@ If you change preprocessing in `model.py`, keep `fambot_backend/cardio_features.
 
 - `.env` (local secrets)
 - `.venv`
-- `cardiovascular_model.pkl`
 - `cardiovascular_model.threshold.json`
 - `feature_importance.png`
 - `firebase-admin.json` (local Firebase Admin SDK key; never commit)
 
-The API **fails at runtime** if `cardiovascular_model.pkl` is missing (unless you point `MODEL_PATH` to a valid file). Agents should mention `uv run model` in docs or setup when adding features that require the model.
+The API **fails at runtime** if `cardiovascular_model.pkl` is missing (unless you point `MODEL_PATH` to a valid file). **Render / production:** commit `cardiovascular_model.pkl` after training locally; do not rely on `uv run model` during the hosting provider’s build (slow and unnecessary). Agents should mention `uv run model` for local/CI training when adding features that require the model.
 
 ---
 

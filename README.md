@@ -54,7 +54,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
 | [`fambot_backend/services/firestore_users.py`](fambot_backend/services/firestore_users.py) | Firestore read/write for `users` collection. |
 | [`model.py`](model.py) | Training: LR vs XGB vs HistGradientBoosting; saves `cardiovascular_model.pkl`, `cardiovascular_model.threshold.json`, `feature_importance.png`. |
 | [`sources/cardio_train.csv`](sources/cardio_train.csv) | Training data (semicolon-separated). |
-| [`cardiovascular_model.pkl`](cardiovascular_model.pkl) | Serialized **champion** pipeline (generated; gitignored). |
+| [`cardiovascular_model.pkl`](cardiovascular_model.pkl) | Serialized **champion** pipeline (commit after `uv run model` so Render and other deploys can load it without training at build time). |
 
 ---
 
@@ -144,7 +144,7 @@ Do **not** set `FAMBOT_SKIP_AUTH` or `FAMBOT_SKIP_FIRESTORE` in production.
 ### 2. Render service
 
 - **Connect** this Git repository to Render and **apply** the Blueprint from [`render.yaml`](render.yaml), or create a **Web Service** manually with the same settings.
-- **Build command:** `uv sync && uv run model` (installs deps and generates `cardiovascular_model.pkl` in the slug; it is gitignored but required at runtime).
+- **Build command:** `uv sync` (installs dependencies only). **Do not** run `uv run model` on Render unless you want long builds and on-the-fly training. Instead, run `uv run model` locally (or in CI), then **commit** `cardiovascular_model.pkl` at the repo root so it is included in the deploy slug. The API loads it at runtime (see `MODEL_PATH`).
 - **Start command:** `bash scripts/render_start.sh` (writes `GOOGLE_SERVICE_ACCOUNT_JSON` to `/tmp/gcp-sa.json`, sets `GOOGLE_APPLICATION_CREDENTIALS`, runs `uv run api`).
 - **Health check path:** `/health`.
 - **Environment:** set `PYTHON_VERSION` to `3.14` if not inherited from [`.python-version`](.python-version). Set the secrets marked `sync: false` in [`render.yaml`](render.yaml) in the dashboard when prompted.
