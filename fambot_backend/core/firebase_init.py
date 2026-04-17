@@ -13,7 +13,10 @@ def init_firebase() -> None:
     # Application Default Credentials (Cloud Run, GCE) or GOOGLE_APPLICATION_CREDENTIALS locally.
     cred = credentials.ApplicationDefault()
     project_id = os.environ.get("FIREBASE_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    storage_bucket = os.environ.get("FIREBASE_STORAGE_BUCKET")
     opts: dict = {}
     if project_id:
         opts["projectId"] = project_id
+    if storage_bucket:
+        opts["storageBucket"] = storage_bucket
     firebase_admin.initialize_app(cred, opts)

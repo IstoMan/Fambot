@@ -9,7 +9,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from fambot_backend.api.routers import auth, health, invitations, users
+from fambot_backend.api.routers import auth, documents, health, invitations, users
 
 app = FastAPI(title="Fambot API", version="0.5.0")
 
@@ -26,6 +26,7 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(invitations.router)
+app.include_router(documents.router)
 
 
 def run() -> None:

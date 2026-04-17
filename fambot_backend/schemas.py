@@ -185,3 +185,16 @@ class AcceptFamilyInviteOut(BaseModel):
 class RemoveFamilyMemberOut(BaseModel):
     removed_uid: str
     group_id: str
+
+
+class DocumentAnalysisOut(BaseModel):
+    file_name: str
+    content_type: str
+    storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
+    storage_uri: str = Field(description="Google Cloud Storage URI for the uploaded file.")
+    analysis_model: str
+    analysis_text: str = Field(
+        description=(
+            "Gemini-generated prevention and lifestyle guidance extracted from the uploaded report."
+        ),
+    )

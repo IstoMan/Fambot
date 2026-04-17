@@ -56,7 +56,7 @@ fambot_backend/
   app.py                    # FastAPI app, CORS, include_router, uvicorn runner
   cardio_features.py        # FEATURE_ORDER shared with model.py; build_feature_frame
   schemas.py                # Pydantic models (API JSON shape)
-  api/routers/              # health, auth, users, invitations (/me/family)
+  api/routers/              # health, auth, users, invitations, documents (/me/*)
   core/
     deps.py                 # HTTPBearer → JWT → firebase_uid (Firebase Auth uid string)
     jwt_tokens.py           # Mint / verify access tokens (FAMBOT_JWT_SECRET)
@@ -65,6 +65,8 @@ fambot_backend/
     inference.py            # MODEL_PATH, joblib load, predict_risk
     identity_toolkit.py     # signInWithPassword for POST /auth/login
     firestore_users.py      # get_user_profile, upsert_onboarding, ensure_user_document, familyGroupId helpers
+    document_storage.py     # upload reports to Firebase Storage (documents/{uid}/...)
+    gemini_reports.py       # Gemini file analysis for prevention/lifestyle recommendations
     family_invites.py       # family groups, invites, QR payload, accept/remove flows
     family_roles.py         # reciprocal family role mapping (vocabulary)
 model.py                    # Offline training; LR vs XGB vs HistGradientBoosting; saves champion
@@ -95,6 +97,9 @@ Production on **Render** is documented in **[`README.md`](README.md)** (Firebase
 | `FAMBOT_JWT_SECRET` | Required (when auth is not skipped) to sign tokens at signup/login and verify them on protected routes. |
 | `FAMBOT_JWT_EXPIRES_SECONDS` | Access token TTL (defaults documented in `core/jwt_tokens.py` / README). |
 | `FIREBASE_WEB_API_KEY` | Required for `POST /auth/login` (Identity Toolkit). |
+| `FIREBASE_STORAGE_BUCKET` | Required for report uploads to Firebase Storage. |
+| `GEMINI_API_KEY` | Required for Gemini report analysis. |
+| `GEMINI_REPORT_MODEL` | Optional Gemini model override (default `gemini-2.5-flash`). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated origins; default allows `*`. |
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token TTL (default 86400; clamped 60–2592000). |
 | `FAMBOT_INVITE_BASE_URL` | Optional prefix for invite URLs embedded in QR codes; if unset, `fambot://family-invite?token=…` is used. |
@@ -174,6 +179,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | Change request validation | `schemas.py` |
 | Change Firestore fields | `services/firestore_users.py`, `schemas.py` (read/write models) |
 | Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `api/routers/invitations.py`, `schemas.py` |
+| Report upload + Gemini analysis | `api/routers/documents.py`, `services/document_storage.py`, `services/gemini_reports.py`, `core/firebase_init.py`, `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |
