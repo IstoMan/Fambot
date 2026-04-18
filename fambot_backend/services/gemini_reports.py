@@ -56,17 +56,27 @@ def analyze_report_with_gemini(
     client = genai.Client(api_key=api_key)
     safe_name = Path(filename).name or "report.bin"
     suffix = Path(safe_name).suffix or ".bin"
+    temp_path: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        # Windows keeps NamedTemporaryFile handles locked while open.
+        # We create a temporary path, close it, then let Gemini SDK read it.
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            temp_path = tmp.name
             tmp.write(payload)
             tmp.flush()
-            uploaded = client.files.upload(file=tmp.name, config={"mime_type": content_type})
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[uploaded, prompt],
-            )
+        uploaded = client.files.upload(file=temp_path, config={"mime_type": content_type})
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[uploaded, prompt],
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Gemini analysis failed: {exc}") from exc
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
     raw_text = (response.text or "").strip()
     if not raw_text:
