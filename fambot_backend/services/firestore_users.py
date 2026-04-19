@@ -49,7 +49,6 @@ def _doc_to_profile(uid: str, data: dict[str, Any] | None) -> UserProfileOut:
         risk_score=data.get("riskScore"),
         risk_class=data.get("riskClass"),
         onboarding_complete=bool(data.get("onboardingComplete", False)),
-        gemini_file_search_store_name=data.get("geminiFileSearchStoreName"),
         updated_at=updated,
     )
 

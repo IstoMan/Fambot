@@ -4,8 +4,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import (
-    DocumentSearchIn,
-    DocumentSearchOut,
     DocumentUploadOut,
     UserDocumentsListOut,
 )

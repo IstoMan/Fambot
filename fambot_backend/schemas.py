@@ -102,7 +102,6 @@ class UserProfileOut(BaseModel):
     )
     risk_class: Literal["low", "moderate", "high"] | None = None
     onboarding_complete: bool = False
-    gemini_file_search_store_name: str | None = None
     updated_at: datetime | None = None
 
 
