@@ -102,6 +102,7 @@ class UserProfileOut(BaseModel):
     )
     risk_class: Literal["low", "moderate", "high"] | None = None
     onboarding_complete: bool = False
+    gemini_file_search_store_name: str | None = None
     updated_at: datetime | None = None
 
 
@@ -187,14 +188,27 @@ class RemoveFamilyMemberOut(BaseModel):
     group_id: str
 
 
-class DocumentAnalysisOut(BaseModel):
+class DocumentUploadOut(BaseModel):
     file_name: str
     content_type: str
     storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
     storage_uri: str = Field(description="Google Cloud Storage URI for the uploaded file.")
-    analysis_model: str
-    analysis_text: str = Field(
-        description=(
-            "Gemini-generated prevention and lifestyle guidance extracted from the uploaded report."
-        ),
-    )
+
+
+class UserDocumentOut(BaseModel):
+    file_name: str
+    content_type: str
+    storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
+    storage_uri: str = Field(description="Google Cloud Storage URI for the file.")
+    size_bytes: int = Field(ge=0)
+    updated_at: datetime | None = None
+
+
+class UserDocumentsListOut(BaseModel):
+    items: list[UserDocumentOut]
+
+
+
+
+
+
