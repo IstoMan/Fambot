@@ -22,7 +22,8 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Builds a feature row matching the trained pipeline (including derived BMI, pulse pressure, MAP proxy).
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
-- **Document upload + Gemini analysis** (`POST /me/documents/analyze`) that stores reports in Firebase Storage under `documents/{uid}/...` and returns prevention and lifestyle recommendations generated from the uploaded file.
+- **Document upload + retrieval** (`POST /me/documents/upload`, `GET /me/documents`) that stores reports in Firebase Storage under `documents/{uid}/...` and lists files for the authenticated user.
+- **Document analysis** (`POST /me/documents/analyze`) uploads a hospital/lab document, loads the user’s Firestore profile (vitals, risk, habits), sends the file to **Gemini** (File API upload + `generate_content`), and returns prevention and lifestyle recommendations as text.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
 
 ---
@@ -119,8 +120,8 @@ Interactive docs (when the server is up):
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON for ADC (typical for local dev). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated list of allowed origins for CORS. Default `*` (single origin string `*` in the list). Strip whitespace around entries. |
 | `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name used for report uploads (for example `my-project.appspot.com`). |
-| `GEMINI_API_KEY` | API key used to call Gemini file analysis. |
-| `GEMINI_REPORT_MODEL` | Optional Gemini model name for report analysis (default `gemini-2.5-flash`). |
+| `GEMINI_API_KEY` | API key for Gemini; required for `POST /me/documents/analyze`. |
+| `GEMINI_REPORT_MODEL` | Optional Gemini model name (default `gemini-2.5-flash`). |
 | `FAMBOT_STORAGE_MAKE_PUBLIC` | Optional `1` to make uploaded Storage objects public after upload (default private). |
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token lifetime (default `86400` = 24h; clamped between 60s and 30 days). |
 | `FAMBOT_INVITE_BASE_URL` | Optional URL prefix for invite links and QR payloads (e.g. `https://app.example.com/join`). If unset, invite URLs use the `fambot://family-invite?token=…` scheme. |
@@ -250,6 +251,24 @@ Returns the **stored** cardiovascular risk from Firestore (`riskScore` / `riskCl
 
 ---
 
+### `POST /me/documents/upload`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+**Content type:** `multipart/form-data`.
+
+**Form fields:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `file` | file | yes | Medical report/document to upload. |
+
+The endpoint uploads the file to Firebase Storage in `documents/{uid}/{uuid}.{ext}`.
+
+**Response** (`DocumentUploadOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`.
+
+**Errors:** `400` empty or invalid upload; `401` auth failures; `500` missing server configuration (`FIREBASE_STORAGE_BUCKET`).
+
 ### `POST /me/documents/analyze`
 
 **Auth:** `Authorization: Bearer <JWT>`.
@@ -260,14 +279,21 @@ Returns the **stored** cardiovascular risk from Firestore (`riskScore` / `riskCl
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `file` | file | yes | Medical report/document to upload and analyze. |
-| `clinical_context` | string | no | Extra context (symptoms, history, goals) sent with the prompt. |
+| `file` | file | yes | Hospital report, lab PDF, image, etc. |
 
-The endpoint uploads the file to Firebase Storage in `documents/{uid}/{uuid}.{ext}` and runs Gemini file analysis to return prevention guidance, lifestyle recommendations, and suggested clinician follow-up questions.
+The server saves the file under `documents/{uid}/...`, reads `users/{uid}` from Firestore for context (age, BP, BMI, risk score/class, lifestyle flags when present), uploads the file to Gemini, and returns structured prevention and lifestyle guidance.
 
-**Response** (`DocumentAnalysisOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`, `analysis_model`, `analysis_text`.
+**Response** (`DocumentAnalyzeOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`, `analysis_model`, `recommendations_text`.
 
-**Errors:** `400` empty or invalid upload; `401` auth failures; `500` missing server configuration (`FIREBASE_STORAGE_BUCKET`, `GEMINI_API_KEY`, or dependencies); `502` Gemini returned no analysis.
+**Errors:** `400` empty upload; `401` auth; `500` missing `GEMINI_API_KEY` or Storage config; `502` Gemini failure or empty response.
+
+### `GET /me/documents`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+Returns files stored for the authenticated user from the Storage prefix `documents/{uid}/`.
+
+**Response** (`UserDocumentsListOut`): `items[]` with `file_name`, `content_type`, `storage_path`, `storage_uri`, `size_bytes`, `updated_at`.
 
 ---
 
