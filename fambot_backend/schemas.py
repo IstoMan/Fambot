@@ -208,6 +208,24 @@ class ChatInteractionResponse(BaseModel):
     new_title: str | None = None
 
 
+class ChatTurnState(str, Enum):
+    QUEUED = "queued"
+    STREAMING = "streaming"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ChatMessageResponse(BaseModel):
+    chat_id: str
+    turn_id: str
+    role: str = "model"
+    content: str
+    citations: list[dict[str, Any]] | None = None
+    new_title: str | None = None
+    state: ChatTurnState = ChatTurnState.COMPLETED
+
+
 class ChatResponse(BaseModel):
     id: str
     title: str

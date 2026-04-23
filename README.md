@@ -6,7 +6,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
 
 **Breaking change:** HTTP routes no longer use a `/v1/` prefix. Clients must call `/auth/…`, `/me/…`, and `/health` directly (for example `POST /auth/login` instead of `POST /v1/auth/login`).
 
-**API 0.6.0:** Documents are only under `/documents` (removed `/me/documents/*` and `POST /documents/upload`); upload is `POST /documents` with optional form field `analyze=true`. **API 0.5.0:** Family invitations (`/me/family/…`) with single-use expiring links, QR PNG (base64), and perspective-aware relationship labels. **API 0.4.0** onboarding: `PUT /me/onboarding` uses cardiovascular-aligned fields (gender, BP, cholesterol and **`gluc_ordinal`** survey tiers, optional lifestyle flags). See [Onboarding](#put-meonboarding) below.
+**API 0.7.0:** Unified chat turn endpoint at `POST /v1/chats/{chat_id}/messages` with `Accept` negotiation (`application/json` buffered or `text/event-stream` SSE). Legacy `POST /chat/{chat_id}` and `POST /chat/{chat_id}/stream` remain as deprecated compatibility routes. **API 0.6.0:** Documents are only under `/documents` (removed `/me/documents/*` and `POST /documents/upload`); upload is `POST /documents` with optional form field `analyze=true`. **API 0.5.0:** Family invitations (`/me/family/…`) with single-use expiring links, QR PNG (base64), and perspective-aware relationship labels. **API 0.4.0** onboarding: `PUT /me/onboarding` uses cardiovascular-aligned fields (gender, BP, cholesterol and **`gluc_ordinal`** survey tiers, optional lifestyle flags). See [Onboarding](#put-meonboarding) below.
 
 ---
 
@@ -23,7 +23,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Adds optional **family-group features** when the user belongs to a group: relationship-weighted aggregates of **other members’** stored risk scores (from their completed onboarding only). First-degree roles (`mother`, `father`, `son`, `daughter`, `brother`, `sister`, `husband`, `wife`) weight **1.0**; `uncle`, `aunt`, `nephew`, `niece` weight **0.5**; if no relationship edge exists for a peer, weight **0.65**. If no group or no peer scores, those columns are missing and **median-imputed** like omitted lifestyle flags.
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
-- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Each turn **always** sends the user’s **profile and cardiovascular risk** in the model context; **stored** documents are **not** preloaded (smaller context). The model can use **tools** to list documents, **include** a specific stored file, and load **family members’** app-recorded **risk** summaries. **Grounding with Google Search** (web) is on by default; set `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH=1` to turn it off. **Gemini File Search** (managed RAG) indexes each user’s uploaded documents when `POST /documents` runs; set `FAMBOT_GEMINI_DISABLE_FILE_SEARCH=1` to skip RAG. The user’s file search store name is stored on `users/{uid}` as `fileSearchStoreName`. The `/stream` route may **buffer** until the tool + search turn completes, then **chunks** the final text for SSE.
+- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /v1/chats/{chat_id}/messages`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Chat behavior stays the same (prompting, tool calls, citations, optional attachments), but transport is unified: send `Accept: application/json` for buffered responses or `Accept: text/event-stream` for SSE. SSE now emits structured events (`message_start`, `token`, `tool_call`, `tool_result`, `citation`, `message_end`, `error`) with `chatId`, `turnId`, `sequence`, and `timestamp`. Legacy `/chat/{chat_id}` and `/chat/{chat_id}/stream` routes remain deprecated shims during migration.
 - **Documents** (`GET /documents`, `POST /documents`, `GET /documents/{doc_id}`, `POST /documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`): upload/list/get/delete medical reports in Firebase Storage under `documents/{uid}/...`; optional **Gemini** analysis on upload (`multipart` form `analyze=true`) or on a stored file by id.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
 
@@ -345,7 +345,7 @@ Creates a Firestore chat session at `users/{uid}/chats/{chat_id}`.
 
 Lists chat sessions for the authenticated user ordered by `last_updated` descending.
 
-### `POST /chat/{chat_id}`
+### `POST /v1/chats/{chat_id}/messages`
 
 **Auth:** `Authorization: Bearer <JWT>`.
 
@@ -355,28 +355,41 @@ Lists chat sessions for the authenticated user ordered by `last_updated` descend
 |-------|------|----------|-------|
 | `message` | string | yes | User prompt text. |
 | `file` | file | no | Optional attachment for this turn. |
+| `Idempotency-Key` | header | no | Optional key to dedupe retried turn submissions. |
 
-Sends **user profile + cardiovascular risk** and recent chat history on every turn (no automatic bulk load of all stored documents). The model may use **function tools** (list stored document names, include a file by name, family risk context), **Gemini File Search** (if the user has a `fileSearchStoreName` and indexing is enabled), and **Grounding with Google Search** (web, unless disabled by env). The optional `file` field is for a **this-turn** attachment only. Persists user+model turns under `users/{uid}/chats/{chat_id}/messages` and updates `last_updated` (and first-turn `new_title` when available).
+Sends **user profile + cardiovascular risk** and recent chat history on every turn (no automatic bulk load of all stored documents). The model may use **function tools** (list stored document names, include a file by name, family risk context), **Gemini File Search** (if the user has a `fileSearchStoreName` and indexing is enabled), and **Grounding with Google Search** (web, unless disabled by env). The optional `file` field is for a **this-turn** attachment only. Persists user+model turns under `users/{uid}/chats/{chat_id}/messages`, updates `last_updated`, and tracks turn lifecycle state (`queued`, `streaming`, `completed`, `failed`, `cancelled`) under `users/{uid}/chats/{chat_id}/turns`.
 
-**Response** (`ChatInteractionResponse`): `role` (`model`), `content`, optional `citations` (may include web/file grounding metadata), optional `new_title`.
+**Response negotiation (`Accept` header):**
 
-### `POST /chat/{chat_id}/stream`
+- `Accept: application/json` (default): returns `ChatMessageResponse` with `chat_id`, `turn_id`, `content`, optional `citations`, optional `new_title`, `state`.
+- `Accept: text/event-stream`: returns SSE.
+
+### `POST /v1/chats/{chat_id}/messages` (SSE mode)
 
 **Auth:** `Authorization: Bearer <JWT>`.
 
-**Content type:** `multipart/form-data` (same fields as `POST /chat/{chat_id}`: `message` required, `file` optional).
+**Content type:** `multipart/form-data` with `Accept: text/event-stream`.
 
 **Response:** `text/event-stream` (Server-Sent Events). Each line is a `data:` line whose payload is a JSON object:
 
 | `type` | Shape |
 |--------|--------|
-| `text` | `{"type":"text","text":"<chunk>"}` — one or more chunks of the assistant reply. If the model returns no text, a single chunk contains the same fallback message as the non-streaming route. |
-| `done` | `{"type":"done","new_title": string \| null, "citations": array \| null}` — sent after the full reply is persisted (`citations` may include grounding metadata when search/tools produced it). |
-| `error` | `{"type":"error","detail":"<message>"}` — only if the stream has already started; use this for client-side error UI. |
+| `message_start` | `{"type":"message_start","chatId","turnId","sequence","timestamp"}` |
+| `token` | `{"type":"token","chatId","turnId","sequence","timestamp","text":"<chunk>"}` |
+| `tool_call` | `{"type":"tool_call","chatId","turnId","sequence","timestamp","name","args","tool_call_id"}` |
+| `tool_result` | `{"type":"tool_result","chatId","turnId","sequence","timestamp","name","result","tool_call_id"}` |
+| `citation` | `{"type":"citation","chatId","turnId","sequence","timestamp","citation":{...}}` |
+| `message_end` | `{"type":"message_end","chatId","turnId","sequence","timestamp","state","new_title","citations"}` |
+| `error` | `{"type":"error","chatId","turnId","sequence","timestamp","detail":"<message>"}` |
 
 **Client note:** the browser’s native `EventSource` only supports **GET** requests. For this **POST** endpoint, use `fetch` with a streaming body reader (or an equivalent) and parse `data: …` lines. Do not use `EventSource` for this route.
 
-**Errors:** `404` if the chat id does not exist. If the generation fails before any bytes are sent, a normal JSON error body may be returned (e.g. `502` from upstream Gemini). Same persistence rules as `POST /chat/{chat_id}`: user and model messages are written to Firestore only after a successful generation.
+**Errors:** `404` if the chat id does not exist. If generation fails before any bytes are sent, a normal JSON error body may be returned; otherwise an `error` SSE event is emitted.
+
+### Deprecated compatibility routes
+
+- `POST /chat/{chat_id}` — compatibility shim that returns the legacy `ChatInteractionResponse`.
+- `POST /chat/{chat_id}/stream` — compatibility shim that emits legacy `text`/`done`/`error` SSE events.
 
 ### `GET /chat/{chat_id}/history`
 

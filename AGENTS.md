@@ -61,6 +61,16 @@ fambot_backend/
     deps.py                 # HTTPBearer → JWT → firebase_uid (Firebase Auth uid string)
     jwt_tokens.py           # Mint / verify access tokens (FAMBOT_JWT_SECRET)
     firebase_init.py        # firebase_admin.initialize_app (ADC)
+    chat_orchestrator.py    # Unified chat turn lifecycle, SSE eventing, persistence finalization
+    context_builder.py      # Chat context slicing (history window)
+    tool_runtime.py         # Tool dispatch bridge for model tool calls
+  providers/
+    model_provider.py       # Provider interface for model streaming/completion
+    gemini_provider.py      # Gemini implementation with streaming + tool loop
+  persistence/
+    chat_repository.py      # Chat/message/turn persistence + idempotency handling
+  telemetry/
+    chat_telemetry.py       # Structured logs/metrics for chat turn lifecycle
   services/
     inference.py            # MODEL_PATH, joblib load, predict_risk
     identity_toolkit.py     # signInWithPassword for POST /auth/login
@@ -189,7 +199,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `services/family_risk_aggregate.py`, `api/routers/invitations.py`, `schemas.py` |
 | Report upload + retrieval | `api/routers/documents.py`, `services/document_storage.py`, `core/firebase_init.py`, `schemas.py` |
 | Document analyze (Gemini + profile) | `api/routers/documents.py`, `services/gemini_document_analysis.py`, `services/firestore_users.py`, `schemas.py` |
-| Chat (tools, web + file search, incl. `POST /chat/{id}/stream` SSE) | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `services/gemini_file_search.py` (RAG store + ingest), `schemas.py` |
+| Chat (tools, web + file search, unified `POST /v1/chats/{id}/messages`) | `api/routers/chats.py`, `core/chat_orchestrator.py`, `providers/gemini_provider.py`, `persistence/chat_repository.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `services/gemini_file_search.py` (RAG store + ingest), `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |

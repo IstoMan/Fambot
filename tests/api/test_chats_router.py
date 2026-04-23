@@ -7,7 +7,10 @@ from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+
+from fambot_backend.schemas import ChatMessageResponse, ChatTurnState
 
 
 @pytest.mark.api
@@ -52,95 +55,100 @@ def test_list_chats(
 
 
 @pytest.mark.api
-@patch("fambot_backend.api.routers.chats.get_chat")
 def test_chat_interaction_not_found(
-    get_chat: MagicMock,
     client: TestClient,
     dry_api_env: None,
 ) -> None:
-    get_chat.return_value = None
-    r = client.post(
-        "/chat/missing",
-        data={"message": "hello"},
-    )
+    with patch(
+        "fambot_backend.api.routers.chats._orchestrator.run_buffered",
+        side_effect=HTTPException(status_code=404, detail="Chat not found"),
+    ):
+        r = client.post(
+            "/chat/missing",
+            data={"message": "hello"},
+        )
     assert r.status_code == 404
 
 
 @pytest.mark.api
-@patch("fambot_backend.api.routers.chats.update_chat_metadata")
-@patch("fambot_backend.api.routers.chats.append_chat_message")
-@patch("fambot_backend.api.routers.chats.generate_chat_turn")
-@patch("fambot_backend.api.routers.chats.list_chat_messages")
-@patch("fambot_backend.api.routers.chats.get_chat")
 def test_chat_interaction_success(
-    get_chat: MagicMock,
-    list_messages: MagicMock,
-    gen_turn: MagicMock,
-    append_msg: MagicMock,
-    update_meta: MagicMock,
     client: TestClient,
     dry_api_env: None,
 ) -> None:
-    get_chat.return_value = {"id": "c1", "title": "T"}
-    list_messages.return_value = [{"role": "user", "content": "hi", "created_at": None}]
-    gen_turn.return_value = {
-        "content": "Hello back",
-        "citations": [{"source": "x"}],
-        "new_title": "Greeting",
-    }
-
-    r = client.post(
-        "/chat/c1",
-        data={"message": "hello there"},
-    )
+    with patch(
+        "fambot_backend.api.routers.chats._orchestrator.run_buffered",
+        return_value=ChatMessageResponse(
+            chat_id="c1",
+            turn_id="t1",
+            content="Hello back",
+            citations=[{"source": "x"}],
+            new_title="Greeting",
+            state=ChatTurnState.COMPLETED,
+        ),
+    ) as run_buffered:
+        r = client.post(
+            "/chat/c1",
+            data={"message": "hello there"},
+        )
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["role"] == "model"
     assert data["content"] == "Hello back"
     assert data["citations"] == [{"source": "x"}]
     assert data["new_title"] == "Greeting"
-
-    gen_turn.assert_called_once()
-    call_kw = gen_turn.call_args.kwargs
-    assert call_kw["uid"] == "dev-user"
-    assert call_kw["user_message"] == "hello there"
-    assert call_kw["history"] == list_messages.return_value
-    assert call_kw["upload_payload"] is None
-
-    assert append_msg.call_count == 2
-    update_meta.assert_called_once()
+    run_buffered.assert_called_once()
 
 
 @pytest.mark.api
-@patch("fambot_backend.api.routers.chats.update_chat_metadata")
-@patch("fambot_backend.api.routers.chats.append_chat_message")
-@patch("fambot_backend.api.routers.chats.generate_chat_turn")
-@patch("fambot_backend.api.routers.chats.list_chat_messages")
-@patch("fambot_backend.api.routers.chats.get_chat")
 def test_chat_interaction_with_file(
-    get_chat: MagicMock,
-    list_messages: MagicMock,
-    gen_turn: MagicMock,
-    append_msg: MagicMock,
-    update_meta: MagicMock,
     client: TestClient,
     dry_api_env: None,
 ) -> None:
-    get_chat.return_value = {"id": "c2", "title": "T"}
-    list_messages.return_value = []
-    gen_turn.return_value = {"content": "ok", "citations": None, "new_title": None}
-
-    r = client.post(
-        "/chat/c2",
-        data={"message": "see file"},
-        files={"file": ("note.txt", BytesIO(b"data"), "text/plain")},
-    )
+    with patch(
+        "fambot_backend.api.routers.chats._orchestrator.run_buffered",
+        return_value=ChatMessageResponse(
+            chat_id="c2",
+            turn_id="t2",
+            content="ok",
+            citations=None,
+            new_title=None,
+            state=ChatTurnState.COMPLETED,
+        ),
+    ) as run_buffered:
+        r = client.post(
+            "/chat/c2",
+            data={"message": "see file"},
+            files={"file": ("note.txt", BytesIO(b"data"), "text/plain")},
+        )
     assert r.status_code == 200, r.text
-    kw = gen_turn.call_args.kwargs
+    kw = run_buffered.call_args.kwargs
     assert kw["upload_name"] == "note.txt"
     assert kw["upload_content_type"] == "text/plain"
     assert kw["upload_payload"] == b"data"
-    assert append_msg.call_args_list[0].kwargs["has_file"] is True
+
+
+@pytest.mark.api
+def test_chat_message_v1_json(
+    client: TestClient,
+    dry_api_env: None,
+) -> None:
+    with patch(
+        "fambot_backend.api.routers.chats._orchestrator.run_buffered",
+        return_value=ChatMessageResponse(
+            chat_id="c9",
+            turn_id="turn-9",
+            content="stream compatible",
+            citations=None,
+            new_title=None,
+            state=ChatTurnState.COMPLETED,
+        ),
+    ):
+        r = client.post("/v1/chats/c9/messages", data={"message": "hi"})
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["chat_id"] == "c9"
+    assert payload["turn_id"] == "turn-9"
+    assert payload["content"] == "stream compatible"
 
 
 @pytest.mark.api
