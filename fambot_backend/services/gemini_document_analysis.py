@@ -1,22 +1,57 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
 from fastapi import HTTPException
 
-from fambot_backend.services.document_storage import (
-    get_user_document,
-    get_user_document_payload,
-    list_user_documents,
+from fambot_backend.services.document_storage import get_user_document_payload, list_user_documents
+from fambot_backend.services.firestore_users import get_file_search_store_name, get_user_profile
+from fambot_backend.services.family_invites import family_peers_for_scoring
+from fambot_backend.services.gemini_file_search import file_search_disabled
+
+CHAT_ASSISTANT_FALLBACK = (
+    "I wasn't able to generate a response just now. Please try again in a moment."
 )
-from fambot_backend.services.firestore_users import get_user_profile
+
+CHAT_SYSTEM_INSTRUCTION = dedent(
+    """
+    You are Fambot, a warm, empathetic health assistant focused on **cardiovascular wellness**
+    and lifestyle. You are not a substitute for a doctor or a diagnosis. Always:
+
+    - Be conversational: short paragraphs, natural follow-up questions, and avoid robotic lists
+      unless the user asks for structure.
+    - Be medically careful: do not diagnose from vague symptoms. Encourage follow-up with a licensed
+      clinician for concerning symptoms, medication changes, or new concerning cardiac or neuro signs.
+    - You always receive **USER_PROFILE_AND_RISK** in the user turn: treat it as your baseline.
+      When you need more detail, call the tools: list stored report file names, include a document by
+      name, and/or fetch family **risk** context. When **File Search** is available (your tools),
+      you can also retrieve from indexed user documents. Do not claim you have document contents
+      you have not retrieved.
+    - If **Google Search (web)** is enabled, you may use it for up-to-date, evidence-informed
+      lifestyle and public health context; it does not replace a clinician. Still align with
+      the user’s stored risk and profile.
+    - End substantive answers with a short disclaimer that this is educational, not a diagnosis,
+      and is not a substitute for emergency or professional care.
+    """
+).strip()
+
+_MAX_TOOL_ROUNDS = 8
 
 
-def _get_client():
+@dataclass
+class _ToolExecResult:
+    response_json: str
+    file_ref: Any | None = None
+
+
+def _get_client() -> Any:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY required")
@@ -49,8 +84,389 @@ def _profile_context(uid: str) -> str:
     return "\n".join(lines) if lines else "(No profile data)"
 
 
+def _user_profile_and_risk_block(uid: str) -> str:
+    return dedent(
+        f"""
+        USER_PROFILE_AND_RISK (authoritative app snapshot; includes risk score, vitals, habits when present):
+        {_profile_context(uid)}
+        """
+    ).strip()
+
+
+def _list_stored_documents_json(uid: str) -> str:
+    try:
+        items = list_user_documents(uid)
+    except Exception as exc:
+        return json.dumps({"error": "Could not list documents", "detail": str(exc)[:200]})
+    out: list[dict[str, Any]] = []
+    for item in items:
+        u = item.get("updated_at")
+        updated = u.isoformat() if hasattr(u, "isoformat") else str(u) if u else None
+        out.append(
+            {
+                "file_name": str(item.get("file_name") or ""),
+                "size_bytes": int(item.get("size_bytes") or 0),
+                "content_type": str(item.get("content_type") or ""),
+                "updated_at": updated,
+            }
+        )
+    return json.dumps({"stored_documents": out, "count": len(out)})
+
+
+def _family_lifestyle_risk_json(uid: str) -> str:
+    try:
+        peers = family_peers_for_scoring(uid)
+    except Exception as exc:
+        return json.dumps({"error": "Could not load family context", "detail": str(exc)[:200]})
+    if not peers:
+        return json.dumps(
+            {
+                "family_members": [],
+                "note": "No family group or no other members in the user’s app account.",
+            }
+        )
+    rows: list[dict[str, Any]] = []
+    for peer_uid, role in peers:
+        prof = get_user_profile(peer_uid)
+        rel = str(role) if role is not None else "peer"
+        rows.append(
+            {
+                "relationship_to_me": rel,
+                "display_name": prof.display_name,
+                "onboarding_complete": prof.onboarding_complete,
+                "risk_score": prof.risk_score,
+                "risk_class": prof.risk_class,
+            }
+        )
+    return json.dumps({"family_members": rows, "count": len(rows)})
+
+
+def _include_stored_document_by_name(uid: str, file_name: str) -> _ToolExecResult:
+    if not file_name or not str(file_name).strip():
+        return _ToolExecResult(response_json=json.dumps({"error": "file_name required"}))
+    target = str(file_name).strip()
+    items = list_user_documents(uid)
+    match: dict[str, Any] | None = None
+    for item in items:
+        if str(item.get("file_name") or "") == target:
+            match = item
+            break
+    if match is None:
+        return _ToolExecResult(
+            response_json=json.dumps(
+                {
+                    "error": "file_not_found",
+                    "file_name": target,
+                    "available": [str(i.get("file_name") or "") for i in items],
+                }
+            )
+        )
+    sp = match.get("storage_path")
+    if not isinstance(sp, str) or not sp:
+        return _ToolExecResult(response_json=json.dumps({"error": "storage path missing"}))
+    try:
+        payload = get_user_document_payload(sp)
+    except Exception as exc:
+        return _ToolExecResult(
+            response_json=json.dumps({"error": "read_failed", "detail": str(exc)[:200]})
+        )
+    client = _get_client()
+    file_ref = _upload_bytes(
+        client,
+        file_name=target,
+        content_type=str(match.get("content_type") or "application/octet-stream"),
+        payload=payload,
+    )
+    return _ToolExecResult(
+        response_json=json.dumps(
+            {
+                "ok": True,
+                "file_name": target,
+                "message": "The file is now attached in the follow-up for this turn.",
+            }
+        ),
+        file_ref=file_ref,
+    )
+
+
+def _tool_dispatch(uid: str, name: str, args: object) -> _ToolExecResult:
+    args = args if isinstance(args, dict) else {}
+    if name == "list_my_stored_documents":
+        return _ToolExecResult(response_json=_list_stored_documents_json(uid))
+    if name == "get_family_lifestyle_risk_context":
+        return _ToolExecResult(response_json=_family_lifestyle_risk_json(uid))
+    if name == "include_stored_document":
+        fn = args.get("file_name")
+        if not isinstance(fn, str):
+            return _ToolExecResult(
+                response_json=json.dumps({"error": "file_name (string) required"}),
+            )
+        return _include_stored_document_by_name(uid, fn)
+    return _ToolExecResult(response_json=json.dumps({"error": f"Unknown tool: {name}"}))
+
+
+def _function_declarations() -> list[Any]:
+    from google.genai import types
+
+    return [
+        types.FunctionDeclaration(
+            name="list_my_stored_documents",
+            description=(
+                "List the user’s uploaded health document file names, sizes, and last-updated time from "
+                "app storage. Call this before referring to a specific file by name."
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="get_family_lifestyle_risk_context",
+            description=(
+                "Retrieves a summary of family group members’ stored app risk scores and relationship "
+                "labels (as recorded in Fambot). Use when lifestyle advice may relate to family history "
+                "or shared risk in the app."
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="include_stored_document",
+            description=(
+                "Load the contents of a stored user document by its exact `file_name` (from list "
+                "results). The tool attaches the file for the rest of the turn. Prefer the File "
+                "Search tool when the user’s documents are already indexed, unless a specific file is required."
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "file_name": {
+                        "type": "string",
+                        "description": "Exact `file_name` for a document returned by list_my_stored_documents.",
+                    },
+                },
+                "required": ["file_name"],
+            },
+        ),
+    ]
+
+
+def _build_tools_list(uid: str) -> list[Any]:
+    from google.genai import types
+
+    out: list[Any] = []
+    if os.environ.get("FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH", "").strip() != "1":
+        out.append(types.Tool(google_search=types.GoogleSearch()))
+    store = get_file_search_store_name(uid)
+    if store and not file_search_disabled():
+        out.append(
+            types.Tool(
+                file_search=types.FileSearch(
+                    file_search_store_names=[store],
+                    top_k=8,
+                )
+            )
+        )
+    out.append(types.Tool(function_declarations=_function_declarations()))
+    return out
+
+
+def _citations_from_response(response: Any) -> list[dict[str, Any]] | None:
+    cands = getattr(response, "candidates", None) or []
+    if not cands:
+        return None
+    out: list[dict[str, Any]] = []
+    for i, c in enumerate(cands):
+        for attr, typ in (("grounding_metadata", "grounding_metadata"), ("citation_metadata", "citation_metadata")):
+            gm = getattr(c, attr, None)
+            if gm is None:
+                continue
+            try:
+                d: Any = gm.model_dump(mode="json", exclude_none=True) if hasattr(gm, "model_dump") else str(gm)
+            except Exception:
+                d = str(gm)
+            out.append({"type": typ, "index": i, "data": d})
+    return out or None
+
+
+def _user_message_text(
+    *, uid: str, user_message: str, history: list[dict[str, Any]] | None
+) -> str:
+    history = history or []
+    transcript_lines: list[str] = []
+    for row in history[-20:]:
+        role = str(row.get("role") or "user")
+        content = str(row.get("content") or "").strip()
+        if content:
+            transcript_lines.append(f"{role}: {content}")
+    transcript = "\n".join(transcript_lines) if transcript_lines else "(No history)"
+    return dedent(
+        f"""
+        {_user_profile_and_risk_block(uid)}
+
+        CHAT_HISTORY:
+        {transcript}
+
+        USER_MESSAGE:
+        {user_message}
+        """
+    ).strip()
+
+
+def _part_from_genai_upload(uploaded: Any) -> Any:
+    from google.genai import types
+
+    uri = getattr(uploaded, "uri", None) or getattr(uploaded, "name", None)
+    if uri is None:
+        return uploaded
+    mt = getattr(uploaded, "mime_type", None) or "application/octet-stream"
+    return types.Part(
+        file_data=types.FileData(file_uri=str(uri), mime_type=mt),
+    )
+
+
+def _fr_payload(result: _ToolExecResult) -> dict[str, Any]:
+    try:
+        j = json.loads(result.response_json)
+        if isinstance(j, dict):
+            return j
+    except Exception:
+        pass
+    return {"result": result.response_json}
+
+
+def run_chat_text_and_citations(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None,
+    upload_name: str | None,
+    upload_content_type: str | None,
+    upload_payload: bytes | None,
+) -> tuple[str, str, list[dict[str, Any]] | None]:
+    """Run one chat turn (tools, web + file search, function calls). Public for SSE handler."""
+    return _run_chat_tool_loop(
+        uid=uid,
+        user_message=user_message,
+        history=history,
+        upload_name=upload_name,
+        upload_content_type=upload_content_type,
+        upload_payload=upload_payload,
+    )
+
+
+def _run_chat_tool_loop(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None,
+    upload_name: str | None,
+    upload_content_type: str | None,
+    upload_payload: bytes | None,
+) -> tuple[str, str, list[dict[str, Any]] | None]:
+    from google.genai import types
+
+    client = _get_client()
+    model_name = _model_name()
+    tools = _build_tools_list(uid)
+    user_text = _user_message_text(uid=uid, user_message=user_message, history=history)
+
+    user_parts: list[Any] = [types.Part(text=user_text)]
+    if upload_payload:
+        up = _upload_bytes(
+            client,
+            file_name=upload_name or "attachment.bin",
+            content_type=upload_content_type or "application/octet-stream",
+            payload=upload_payload,
+        )
+        user_parts.append(_part_from_genai_upload(up))
+    contents: list[types.Content] = [types.Content(role="user", parts=user_parts)]
+    config = types.GenerateContentConfig(
+        system_instruction=CHAT_SYSTEM_INSTRUCTION,
+        tools=tools,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+    last: Any = None
+    for _ in range(_MAX_TOOL_ROUNDS):
+        last = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config,
+        )
+        cands = getattr(last, "candidates", None) or []
+        fcall: Any = None
+        fcall_id: str | None = None
+        if cands and cands[0].content and cands[0].content.parts:
+            for p in cands[0].content.parts:
+                fc = getattr(p, "function_call", None)
+                if fc is not None and getattr(fc, "name", None):
+                    fcall = fc
+                    fcall_id = getattr(fc, "id", None) or "call"
+                    break
+        if fcall is None:
+            t = (last.text or "").strip() or CHAT_ASSISTANT_FALLBACK
+            return model_name, t, _citations_from_response(last)
+
+        if not cands[0].content or not cands[0].content.parts:
+            break
+        contents.append(
+            types.Content(
+                role="model",
+                parts=list(cands[0].content.parts),
+            )
+        )
+
+        name = str(fcall.name or "")
+        args = fcall.args if isinstance(getattr(fcall, "args", None), dict) else {}
+        t_result = _tool_dispatch(uid, name, args)
+        fr = types.FunctionResponse(
+            id=fcall_id,
+            name=name,
+            response=_fr_payload(t_result),
+        )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part(function_response=fr)],
+            )
+        )
+        if t_result.file_ref is not None and name == "include_stored_document":
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        _part_from_genai_upload(t_result.file_ref),
+                        types.Part(
+                            text="Incorporate this file when replying. Summarize or quote only what is relevant; "
+                            "do not invent values not in the file."
+                        ),
+                    ],
+                )
+            )
+    if last is None:
+        return model_name, CHAT_ASSISTANT_FALLBACK, None
+    out = (last.text or "").strip() or CHAT_ASSISTANT_FALLBACK
+    return model_name, out, _citations_from_response(last)
+
+
 def _model_name() -> str:
     return os.environ.get("GEMINI_REPORT_MODEL", "gemini-2.5-flash")
+
+
+def maybe_new_chat_title(
+    *, user_message: str, history: list[dict[str, Any]] | None = None
+) -> str | None:
+    history = history or []
+    if any(str(row.get("role")) == "user" for row in history):
+        return None
+    client = _get_client()
+    model_name = _model_name()
+    try:
+        title_response = client.models.generate_content(
+            model=model_name,
+            contents=(
+                "Generate a short chat title (max 5 words, plain text only) for: "
+                f"{user_message}"
+            ),
+        )
+    except Exception:
+        return None
+    candidate = (title_response.text or "").strip().strip('"').strip("'")
+    return candidate or None
 
 
 def analyze_uploaded_document(
@@ -96,6 +512,8 @@ def analyze_uploaded_document(
 
 
 def analyze_stored_document(*, uid: str, doc_id: str) -> dict[str, str]:
+    from fambot_backend.services.document_storage import get_user_document
+
     doc = get_user_document(uid, doc_id)
     storage_path = doc.get("storage_path")
     if not isinstance(storage_path, str) or not storage_path:
@@ -118,102 +536,50 @@ def generate_chat_turn(
     upload_content_type: str | None = None,
     upload_payload: bytes | None = None,
 ) -> dict[str, Any]:
-    client = _get_client()
-    model_name = _model_name()
-    docs = list_user_documents(uid)[:3]
-    context_block = _profile_context(uid)
-    history = history or []
-
-    gemini_parts: list[Any] = []
-    for item in docs:
-        storage_path = item.get("storage_path")
-        if not isinstance(storage_path, str) or not storage_path:
-            continue
-        try:
-            payload = get_user_document_payload(storage_path)
-            gemini_parts.append(
-                _upload_bytes(
-                    client,
-                    file_name=str(item.get("file_name") or "document"),
-                    content_type=str(item.get("content_type") or "application/octet-stream"),
-                    payload=payload,
-                )
-            )
-        except HTTPException:
-            continue
-
-    if upload_payload:
-        gemini_parts.append(
-            _upload_bytes(
-                client,
-                file_name=upload_name or "attachment.bin",
-                content_type=upload_content_type or "application/octet-stream",
-                payload=upload_payload,
-            )
-        )
-
-    transcript_lines: list[str] = []
-    for row in history[-20:]:
-        role = str(row.get("role") or "user")
-        content = str(row.get("content") or "").strip()
-        if content:
-            transcript_lines.append(f"{role}: {content}")
-    transcript = "\n".join(transcript_lines) if transcript_lines else "(No history)"
-
-    prompt = dedent(
-        f"""
-        You are Fambot, a health assistant.
-        Use uploaded documents as primary evidence when available.
-        Be concise, professional, and include a brief non-diagnostic disclaimer.
-
-        USER PROFILE:
-        {context_block}
-
-        CHAT HISTORY:
-        {transcript}
-
-        USER MESSAGE:
-        {user_message}
-        """
-    ).strip()
-
     try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[*gemini_parts, prompt],
+        model_name, text, citations = run_chat_text_and_citations(
+            uid=uid,
+            user_message=user_message,
+            history=history,
+            upload_name=upload_name,
+            upload_content_type=upload_content_type,
+            upload_payload=upload_payload,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}") from exc
-
-    text = (response.text or "").strip()
-    if not text:
-        text = (
-            "I wasn't able to generate a response just now. "
-            "Please try again in a moment."
-        )
-
-    new_title: str | None = None
-    if not any(str(row.get("role")) == "user" for row in history):
-        try:
-            title_response = client.models.generate_content(
-                model=model_name,
-                contents=(
-                    "Generate a short chat title (max 5 words, plain text only) for: "
-                    f"{user_message}"
-                ),
-            )
-            candidate = (title_response.text or "").strip().strip('"').strip("'")
-            if candidate:
-                new_title = candidate
-        except Exception:
-            new_title = None
-
     return {
         "model": model_name,
         "content": text,
-        "citations": None,
-        "new_title": new_title,
+        "citations": citations,
+        "new_title": maybe_new_chat_title(user_message=user_message, history=history),
     }
+
+
+def generate_chat_turn_stream(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None = None,
+    upload_name: str | None = None,
+    upload_content_type: str | None = None,
+    upload_payload: bytes | None = None,
+) -> Iterator[str]:
+    try:
+        _m, text, _c = run_chat_text_and_citations(
+            uid=uid,
+            user_message=user_message,
+            history=history,
+            upload_name=upload_name,
+            upload_content_type=upload_content_type,
+            upload_payload=upload_payload,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}") from exc
+    step = max(1, min(48, max(len(text) // 48, 1)))
+    for i in range(0, len(text), step):
+        yield text[i : i + step]
 
 
 def chat_with_documents(uid: str, user_query: str | None = None) -> dict[str, str]:

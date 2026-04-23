@@ -85,6 +85,25 @@ def get_user_family_group_id(uid: str) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
+def get_file_search_store_name(uid: str) -> str | None:
+    """Gemini File Search store resource name on `users/{uid}` (camelCase `fileSearchStoreName`)."""
+    if os.environ.get("FAMBOT_SKIP_FIRESTORE") == "1":
+        return None
+    snap = _db().collection("users").document(uid).get()
+    data = snap.to_dict() or {}
+    raw = data.get("fileSearchStoreName")
+    return raw if isinstance(raw, str) and raw else None
+
+
+def set_file_search_store_name(uid: str, file_search_store_name: str) -> None:
+    if os.environ.get("FAMBOT_SKIP_FIRESTORE") == "1":
+        return
+    _db().collection("users").document(uid).set(
+        {"fileSearchStoreName": file_search_store_name},
+        merge=True,
+    )
+
+
 def set_user_family_group_id(uid: str, family_group_id: str | None) -> None:
     """Set or clear `familyGroupId` on the user document."""
     if os.environ.get("FAMBOT_SKIP_FIRESTORE") == "1":

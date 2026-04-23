@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import (
@@ -20,7 +23,12 @@ from fambot_backend.services.chat_history import (
     list_chats as list_chat_sessions,
     update_chat_metadata,
 )
-from fambot_backend.services.gemini_document_analysis import generate_chat_turn
+from fambot_backend.services.gemini_document_analysis import (
+    CHAT_ASSISTANT_FALLBACK,
+    generate_chat_turn,
+    maybe_new_chat_title,
+    run_chat_text_and_citations,
+)
 
 router = APIRouter(tags=["chats"])
 
@@ -116,6 +124,95 @@ def chat_interaction(
     )
 
 
+@router.post("/chat/{chat_id}/stream")
+def chat_interaction_stream(
+    chat_id: str,
+    message: str = Form(...),
+    file: UploadFile | None = File(None),
+    uid: str = Depends(firebase_uid),
+) -> StreamingResponse:
+    chat = get_chat(uid, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    file_payload: bytes | None = None
+    file_name: str | None = None
+    file_content_type: str | None = None
+    if file is not None:
+        file_name = file.filename
+        file_content_type = file.content_type or "application/octet-stream"
+        file_payload = file.file.read()
+
+    history = list_chat_messages(uid, chat_id, limit=20)
+
+    def event_gen() -> Iterator[bytes]:
+        emitted = False
+        try:
+            _m, full_text, stream_citations = run_chat_text_and_citations(
+                uid=uid,
+                user_message=message,
+                history=history,
+                upload_name=file_name,
+                upload_content_type=file_content_type,
+                upload_payload=file_payload,
+            )
+            if not (full_text or "").strip():
+                full_text = CHAT_ASSISTANT_FALLBACK
+            step = max(1, min(48, max(len(full_text) // 48, 1)))
+            for i in range(0, len(full_text), step):
+                chunk = full_text[i : i + step]
+                emitted = True
+                yield _sse_event({"type": "text", "text": chunk})
+            new_title = maybe_new_chat_title(user_message=message, history=history)
+            append_chat_message(
+                uid,
+                chat_id,
+                role="user",
+                content=message,
+                has_file=bool(file_payload),
+            )
+            append_chat_message(
+                uid,
+                chat_id,
+                role="model",
+                content=full_text,
+                citations=stream_citations if isinstance(stream_citations, list) else None,
+            )
+            update_chat_metadata(
+                uid,
+                chat_id,
+                title=new_title if isinstance(new_title, str) else None,
+            )
+            yield _sse_event(
+                {
+                    "type": "done",
+                    "new_title": new_title if isinstance(new_title, str) else None,
+                    "citations": stream_citations
+                    if isinstance(stream_citations, list)
+                    else None,
+                }
+            )
+        except HTTPException as exc:
+            if not emitted:
+                raise exc
+            yield _sse_event({"type": "error", "detail": _http_error_detail(exc)})
+        except Exception as exc:
+            if not emitted:
+                raise HTTPException(
+                    status_code=500, detail="Chat stream failed"
+                ) from exc
+            yield _sse_event({"type": "error", "detail": str(exc)})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/chat/{chat_id}/history", response_model=list[MessageResponse])
 def get_history(chat_id: str, uid: str = Depends(firebase_uid)) -> list[MessageResponse]:
     payloads = list_chat_messages(uid, chat_id)
@@ -139,3 +236,14 @@ def _as_dt(raw: object, fallback: datetime | None = None) -> datetime:
     if isinstance(raw, datetime):
         return raw
     return fallback or datetime.now(timezone.utc)
+
+
+def _sse_event(obj: object) -> bytes:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _http_error_detail(exc: HTTPException) -> str:
+    d: object = exc.detail
+    if isinstance(d, str):
+        return d
+    return "Request failed"
