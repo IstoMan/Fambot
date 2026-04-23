@@ -106,6 +106,7 @@ Production on **Render** is documented in **[`README.md`](README.md)** (Firebase
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token TTL (default 86400; clamped 60–2592000). |
 | `FAMBOT_INVITE_BASE_URL` | Optional prefix for invite URLs embedded in QR codes; if unset, `fambot://family-invite?token=…` is used. |
 | `FAMBOT_RUN_EXTERNAL_TESTS` | Set to `1` to enable pytest `external` tests that call real HTTP APIs (Identity Toolkit, optional health URL). |
+| `FAMBOT_RUN_GEMINI_LIVE` | Set to `1` with `GEMINI_API_KEY` to enable pytest `gemini_live` tests (one minimal real `generate_content` call; network cost). |
 | `FAMBOT_EXTERNAL_TEST_EMAIL` / `FAMBOT_EXTERNAL_TEST_PASSWORD` | Optional disposable Firebase user for the optional successful-login external test. |
 | `FAMBOT_EXTERNAL_HEALTH_URL` | Optional URL for a trivial GET in external smoke tests. |
 
@@ -209,12 +210,15 @@ The repository uses **pytest** (`uv sync --group dev`, then `uv run pytest`). La
 
 | Marker / scope | What it covers |
 |----------------|----------------|
-| Default (`uv run pytest`) | Excludes `external` tests via `[tool.pytest.ini_options]` `addopts = "-m 'not external'"`. Unit + API tests use mocks, `TestClient`, and/or `FAMBOT_SKIP_*` flags—**no** live Firebase, Storage, or Identity Toolkit by default. |
-| `unit` | Pure logic (features, JWT helpers, schemas, inference against committed `cardiovascular_model.pkl`). |
-| `api` | HTTP layer with `TestClient` (health, onboarding with skip flags, JWT auth, mocked auth/storage). |
+| Default (`uv run pytest`) | Excludes `external` and `gemini_live` via `addopts = "-m 'not external and not gemini_live'"`. Unit + API tests use mocks, `TestClient`, and/or `FAMBOT_SKIP_*` flags—**no** live Firebase, Storage, Identity Toolkit, or Gemini by default. |
+| `unit` | Pure logic (features, JWT helpers, schemas, inference and committed `cardiovascular_model.pkl`, family aggregates, mocked Gemini helpers, holdout ROC-AUC regression on `cardio_train.csv`). |
+| `api` | HTTP layer with `TestClient` (health, onboarding with skip flags, JWT auth, mocked auth/storage, documents list/upload/analyze, chats). |
 | `external` | Real network or Google APIs. **Also** requires `FAMBOT_RUN_EXTERNAL_TESTS=1` inside tests so `pytest -m external` alone does not surprise-hit production keys without intent. |
+| `gemini_live` | Real Gemini `generate_content` smoke in [`tests/external/test_gemini_live.py`](tests/external/test_gemini_live.py). Requires `FAMBOT_RUN_GEMINI_LIVE=1` and `GEMINI_API_KEY`. |
 
 **External / live tests:** `FAMBOT_RUN_EXTERNAL_TESTS=1 uv run pytest -m external` — needs `FIREBASE_WEB_API_KEY` for Identity Toolkit smoke; optional `FAMBOT_EXTERNAL_TEST_EMAIL` / `FAMBOT_EXTERNAL_TEST_PASSWORD` for a successful login check; optional `FAMBOT_EXTERNAL_HEALTH_URL` for a trivial HTTP GET.
+
+**Gemini live smoke:** `FAMBOT_RUN_GEMINI_LIVE=1 uv run pytest -m gemini_live` — requires `GEMINI_API_KEY`; performs a minimal real model call (intended for manual / pre-release checks, not required in CI).
 
 Manual smoke checks still useful after releases:
 

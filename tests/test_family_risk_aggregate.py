@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from fambot_backend.schemas import UserProfileOut
 from fambot_backend.services.family_risk_aggregate import (
     RISK_SCORE_HIGH_MIN,
@@ -8,6 +10,7 @@ from fambot_backend.services.family_risk_aggregate import (
 )
 
 
+@pytest.mark.unit
 def test_neutral_when_no_peers(monkeypatch) -> None:
     monkeypatch.setattr(
         "fambot_backend.services.family_risk_aggregate.family_peers_for_scoring",
@@ -17,6 +20,7 @@ def test_neutral_when_no_peers(monkeypatch) -> None:
     assert row == neutral_family_features()
 
 
+@pytest.mark.unit
 def test_weighted_aggregates_use_member_scores(monkeypatch) -> None:
     monkeypatch.setattr(
         "fambot_backend.services.family_risk_aggregate.family_peers_for_scoring",
@@ -54,6 +58,7 @@ def test_weighted_aggregates_use_member_scores(monkeypatch) -> None:
     assert row["fam_any_member_high_risk"] == 0.0
 
 
+@pytest.mark.unit
 def test_high_flag_when_member_above_threshold(monkeypatch) -> None:
     monkeypatch.setattr(
         "fambot_backend.services.family_risk_aggregate.family_peers_for_scoring",
