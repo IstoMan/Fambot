@@ -7,27 +7,30 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from fambot_backend.services.gemini_document_analysis import CHAT_ASSISTANT_FALLBACK
+from fambot_backend.core.chat_orchestrator import StreamEvent
 
 @pytest.mark.api
 def test_chat_stream_returns_sse_text_and_done(
     client: TestClient,
     dry_api_env: None,
 ) -> None:
-    with (
-        patch(
-            "fambot_backend.api.routers.chats.get_chat",
-            return_value={"id": "c1", "title": "T"},
+    events = [
+        StreamEvent(payload={"type": "message_start", "chatId": "c1", "turnId": "t1", "sequence": 1, "timestamp": "now"}),
+        StreamEvent(payload={"type": "token", "chatId": "c1", "turnId": "t1", "sequence": 2, "timestamp": "now", "text": "Hello"}),
+        StreamEvent(
+            payload={
+                "type": "message_end",
+                "chatId": "c1",
+                "turnId": "t1",
+                "sequence": 3,
+                "timestamp": "now",
+                "citations": None,
+                "new_title": None,
+                "state": "completed",
+            }
         ),
-        patch("fambot_backend.api.routers.chats.list_chat_messages", return_value=[]),
-        patch(
-            "fambot_backend.api.routers.chats.run_chat_text_and_citations",
-            return_value=("gemini-2.5-flash", "Hello", None),
-        ),
-        patch("fambot_backend.api.routers.chats.maybe_new_chat_title", return_value=None),
-        patch("fambot_backend.api.routers.chats.append_chat_message") as mock_append,
-        patch("fambot_backend.api.routers.chats.update_chat_metadata") as mock_update,
-    ):
+    ]
+    with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
         r = client.post("/chat/c1/stream", data={"message": "hi"})
 
     assert r.status_code == 200
@@ -36,33 +39,45 @@ def test_chat_stream_returns_sse_text_and_done(
     body = r.text
     assert "data:" in body
     assert '"type"' in body and "text" in body
-    assert "H" in body and "e" in body and "l" in body and "o" in body
+    assert "Hello" in body
     assert "done" in body
-    assert mock_append.call_count == 2
-    mock_update.assert_called_once()
 
 
 @pytest.mark.api
-def test_chat_stream_no_chunks_uses_assistant_fallback(
+def test_chat_stream_error_event(
     client: TestClient,
     dry_api_env: None,
 ) -> None:
-    with (
-        patch(
-            "fambot_backend.api.routers.chats.get_chat",
-            return_value={"id": "c1", "title": "T"},
-        ),
-        patch("fambot_backend.api.routers.chats.list_chat_messages", return_value=[]),
-        patch(
-            "fambot_backend.api.routers.chats.run_chat_text_and_citations",
-            return_value=("gemini-2.5-flash", "", None),
-        ),
-        patch("fambot_backend.api.routers.chats.maybe_new_chat_title", return_value=None),
-        patch("fambot_backend.api.routers.chats.append_chat_message"),
-        patch("fambot_backend.api.routers.chats.update_chat_metadata"),
-    ):
+    events = [
+        StreamEvent(payload={"type": "message_start", "chatId": "c1", "turnId": "t1", "sequence": 1, "timestamp": "now"}),
+        StreamEvent(payload={"type": "error", "chatId": "c1", "turnId": "t1", "sequence": 2, "timestamp": "now", "detail": "broken"}),
+    ]
+    with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
         r = client.post("/chat/c1/stream", data={"message": "hi"})
-
     assert r.status_code == 200
-    for c in (CHAT_ASSISTANT_FALLBACK[0], CHAT_ASSISTANT_FALLBACK[-1], "m", "o"):
-        assert c in r.text
+    assert '"type": "error"' in r.text
+    assert "broken" in r.text
+
+
+@pytest.mark.api
+def test_chat_message_v1_stream_contract(
+    client: TestClient,
+    dry_api_env: None,
+) -> None:
+    events = [
+        StreamEvent(payload={"type": "message_start", "chatId": "c5", "turnId": "tx", "sequence": 1, "timestamp": "now"}),
+        StreamEvent(payload={"type": "token", "chatId": "c5", "turnId": "tx", "sequence": 2, "timestamp": "now", "text": "A"}),
+        StreamEvent(payload={"type": "tool_call", "chatId": "c5", "turnId": "tx", "sequence": 3, "timestamp": "now", "name": "list_my_stored_documents"}),
+        StreamEvent(payload={"type": "message_end", "chatId": "c5", "turnId": "tx", "sequence": 4, "timestamp": "now", "state": "completed"}),
+    ]
+    with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
+        r = client.post(
+            "/v1/chats/c5/messages",
+            data={"message": "hello"},
+            headers={"Accept": "text/event-stream"},
+        )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("content-type", "").startswith("text/event-stream")
+    assert '"type": "tool_call"' in r.text
+    assert '"chatId": "c5"' in r.text
+    assert '"turnId": "tx"' in r.text

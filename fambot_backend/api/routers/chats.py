@@ -5,32 +5,26 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
+from fambot_backend.core.chat_orchestrator import ChatOrchestrator
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import (
     ChatCreateRequest,
     ChatInteractionResponse,
+    ChatMessageResponse,
     ChatResponse,
     MessageResponse,
 )
 from fambot_backend.services.chat_history import (
-    append_chat_message,
     create_chat,
-    get_chat,
     list_chat_messages,
     list_chats as list_chat_sessions,
-    update_chat_metadata,
-)
-from fambot_backend.services.gemini_document_analysis import (
-    CHAT_ASSISTANT_FALLBACK,
-    generate_chat_turn,
-    maybe_new_chat_title,
-    run_chat_text_and_citations,
 )
 
 router = APIRouter(tags=["chats"])
+_orchestrator = ChatOrchestrator()
 
 
 @router.post("/chat/new", response_model=ChatResponse)
@@ -65,146 +59,89 @@ def list_chats(uid: str = Depends(firebase_uid)) -> list[ChatResponse]:
     return out
 
 
-@router.post("/chat/{chat_id}", response_model=ChatInteractionResponse)
+@router.post("/v1/chats/{chat_id}/messages", response_model=ChatMessageResponse)
+def create_chat_message_v1(
+    chat_id: str,
+    request: Request,
+    message: str = Form(...),
+    file: UploadFile | None = File(None),
+    uid: str = Depends(firebase_uid),
+    idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> ChatMessageResponse | StreamingResponse:
+    file_name, file_content_type, file_payload = _read_upload(file)
+    accept_value = request.headers.get("accept", "").lower()
+    idempotency_key = idempotency_key_header or None
+    if "text/event-stream" in accept_value:
+        return StreamingResponse(
+            _new_streaming_sse(
+                chat_id=chat_id,
+                uid=uid,
+                message=message,
+                file_name=file_name,
+                file_content_type=file_content_type,
+                file_payload=file_payload,
+                idempotency_key=idempotency_key,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    return _orchestrator.run_buffered(
+        uid=uid,
+        chat_id=chat_id,
+        user_message=message,
+        upload_name=file_name,
+        upload_content_type=file_content_type,
+        upload_payload=file_payload,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/chat/{chat_id}", response_model=ChatInteractionResponse, deprecated=True)
 def chat_interaction(
     chat_id: str,
     message: str = Form(...),
     file: UploadFile | None = File(None),
     uid: str = Depends(firebase_uid),
 ) -> ChatInteractionResponse:
-    chat = get_chat(uid, chat_id)
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found")
-
-    file_payload: bytes | None = None
-    file_name: str | None = None
-    file_content_type: str | None = None
-    if file is not None:
-        file_name = file.filename
-        file_content_type = file.content_type or "application/octet-stream"
-        file_payload = file.file.read()
-
-    history = list_chat_messages(uid, chat_id, limit=20)
-    ai_result = generate_chat_turn(
+    file_name, file_content_type, file_payload = _read_upload(file)
+    response = _orchestrator.run_buffered(
         uid=uid,
+        chat_id=chat_id,
         user_message=message,
-        history=history,
         upload_name=file_name,
         upload_content_type=file_content_type,
         upload_payload=file_payload,
-    )
-    ai_text = str(ai_result.get("content") or "").strip()
-    citations = ai_result.get("citations")
-    new_title = ai_result.get("new_title")
-
-    append_chat_message(
-        uid,
-        chat_id,
-        role="user",
-        content=message,
-        has_file=bool(file_payload),
-    )
-    append_chat_message(
-        uid,
-        chat_id,
-        role="model",
-        content=ai_text,
-        citations=citations if isinstance(citations, list) else None,
-    )
-    update_chat_metadata(
-        uid,
-        chat_id,
-        title=new_title if isinstance(new_title, str) else None,
+        idempotency_key=None,
     )
     return ChatInteractionResponse(
         role="model",
-        content=ai_text,
-        citations=citations if isinstance(citations, list) else None,
-        new_title=new_title if isinstance(new_title, str) else None,
+        content=response.content,
+        citations=response.citations,
+        new_title=response.new_title,
     )
 
 
-@router.post("/chat/{chat_id}/stream")
+@router.post("/chat/{chat_id}/stream", deprecated=True)
 def chat_interaction_stream(
     chat_id: str,
     message: str = Form(...),
     file: UploadFile | None = File(None),
     uid: str = Depends(firebase_uid),
 ) -> StreamingResponse:
-    chat = get_chat(uid, chat_id)
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found")
-
-    file_payload: bytes | None = None
-    file_name: str | None = None
-    file_content_type: str | None = None
-    if file is not None:
-        file_name = file.filename
-        file_content_type = file.content_type or "application/octet-stream"
-        file_payload = file.file.read()
-
-    history = list_chat_messages(uid, chat_id, limit=20)
-
-    def event_gen() -> Iterator[bytes]:
-        emitted = False
-        try:
-            _m, full_text, stream_citations = run_chat_text_and_citations(
-                uid=uid,
-                user_message=message,
-                history=history,
-                upload_name=file_name,
-                upload_content_type=file_content_type,
-                upload_payload=file_payload,
-            )
-            if not (full_text or "").strip():
-                full_text = CHAT_ASSISTANT_FALLBACK
-            step = max(1, min(48, max(len(full_text) // 48, 1)))
-            for i in range(0, len(full_text), step):
-                chunk = full_text[i : i + step]
-                emitted = True
-                yield _sse_event({"type": "text", "text": chunk})
-            new_title = maybe_new_chat_title(user_message=message, history=history)
-            append_chat_message(
-                uid,
-                chat_id,
-                role="user",
-                content=message,
-                has_file=bool(file_payload),
-            )
-            append_chat_message(
-                uid,
-                chat_id,
-                role="model",
-                content=full_text,
-                citations=stream_citations if isinstance(stream_citations, list) else None,
-            )
-            update_chat_metadata(
-                uid,
-                chat_id,
-                title=new_title if isinstance(new_title, str) else None,
-            )
-            yield _sse_event(
-                {
-                    "type": "done",
-                    "new_title": new_title if isinstance(new_title, str) else None,
-                    "citations": stream_citations
-                    if isinstance(stream_citations, list)
-                    else None,
-                }
-            )
-        except HTTPException as exc:
-            if not emitted:
-                raise exc
-            yield _sse_event({"type": "error", "detail": _http_error_detail(exc)})
-        except Exception as exc:
-            if not emitted:
-                raise HTTPException(
-                    status_code=500, detail="Chat stream failed"
-                ) from exc
-            yield _sse_event({"type": "error", "detail": str(exc)})
+    file_name, file_content_type, file_payload = _read_upload(file)
 
     return StreamingResponse(
-        event_gen(),
+        _legacy_streaming_sse(
+            chat_id=chat_id,
+            uid=uid,
+            message=message,
+            file_name=file_name,
+            file_content_type=file_content_type,
+            file_payload=file_payload,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -242,8 +179,74 @@ def _sse_event(obj: object) -> bytes:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
-def _http_error_detail(exc: HTTPException) -> str:
-    d: object = exc.detail
-    if isinstance(d, str):
-        return d
-    return "Request failed"
+def _read_upload(file: UploadFile | None) -> tuple[str | None, str | None, bytes | None]:
+    if file is None:
+        return None, None, None
+    return (
+        file.filename,
+        file.content_type or "application/octet-stream",
+        file.file.read(),
+    )
+
+
+def _new_streaming_sse(
+    *,
+    chat_id: str,
+    uid: str,
+    message: str,
+    file_name: str | None,
+    file_content_type: str | None,
+    file_payload: bytes | None,
+    idempotency_key: str | None,
+) -> Iterator[bytes]:
+    for event in _orchestrator.run_stream(
+        uid=uid,
+        chat_id=chat_id,
+        user_message=message,
+        upload_name=file_name,
+        upload_content_type=file_content_type,
+        upload_payload=file_payload,
+        idempotency_key=idempotency_key,
+    ):
+        yield _sse_event(event.payload)
+
+
+def _legacy_streaming_sse(
+    *,
+    chat_id: str,
+    uid: str,
+    message: str,
+    file_name: str | None,
+    file_content_type: str | None,
+    file_payload: bytes | None,
+) -> Iterator[bytes]:
+    citations: list[dict[str, object]] | None = None
+    new_title: str | None = None
+    for event in _orchestrator.run_stream(
+        uid=uid,
+        chat_id=chat_id,
+        user_message=message,
+        upload_name=file_name,
+        upload_content_type=file_content_type,
+        upload_payload=file_payload,
+        idempotency_key=None,
+    ):
+        event_type = str(event.payload.get("type") or "")
+        if event_type == "token":
+            text = event.payload.get("text")
+            if isinstance(text, str):
+                yield _sse_event({"type": "text", "text": text})
+        elif event_type == "message_end":
+            c = event.payload.get("citations")
+            t = event.payload.get("new_title")
+            citations = c if isinstance(c, list) else citations
+            new_title = t if isinstance(t, str) else None
+            yield _sse_event({"type": "done", "new_title": new_title, "citations": citations})
+        elif event_type == "error":
+            detail = event.payload.get("detail")
+            yield _sse_event(
+                {
+                    "type": "error",
+                    "detail": detail if isinstance(detail, str) else "Request failed",
+                }
+            )
