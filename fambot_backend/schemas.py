@@ -188,35 +188,6 @@ class RemoveFamilyMemberOut(BaseModel):
     group_id: str
 
 
-class DocumentUploadOut(BaseModel):
-    file_name: str
-    content_type: str
-    storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
-    storage_uri: str = Field(description="Google Cloud Storage URI for the uploaded file.")
-
-
-class UserDocumentOut(BaseModel):
-    file_name: str
-    content_type: str
-    storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
-    storage_uri: str = Field(description="Google Cloud Storage URI for the file.")
-    size_bytes: int = Field(ge=0)
-    updated_at: datetime | None = None
-
-
-class UserDocumentsListOut(BaseModel):
-    items: list[UserDocumentOut]
-
-
-class DocumentAnalyzeOut(BaseModel):
-    file_name: str
-    content_type: str
-    storage_path: str
-    storage_uri: str
-    analysis_model: str
-    recommendations_text: str
-
-
 class ChatCreateRequest(BaseModel):
     chat_id: str | None = None
     title: str | None = "New Chat"
@@ -252,20 +223,33 @@ class DocumentType(str, Enum):
     OTHER = "other"
 
 
-class FeverDocumentResponse(BaseModel):
-    id: str
+class DocumentItem(BaseModel):
+    """One user-owned document in Firebase Storage (`documents/{uid}/…`)."""
+
+    id: str = Field(description="Document id; same as the stored filename.")
     filename: str
-    type: DocumentType | None = None
     content_type: str
-    size: int
-    storage_path: str | None = None
-    created_at: datetime
+    size_bytes: int = Field(ge=0)
+    storage_path: str = Field(description="Firebase Storage object path inside the bucket.")
+    storage_uri: str | None = Field(default=None, description="Google Cloud Storage URI when known.")
+    updated_at: datetime | None = None
+    type: DocumentType | None = None
+    analysis_model: str | None = Field(
+        default=None,
+        description="Set on multipart upload when `analyze=true`, otherwise null.",
+    )
+    recommendations_text: str | None = Field(
+        default=None,
+        description="Set on multipart upload when `analyze=true`, otherwise null.",
+    )
 
 
-class DocumentAnalyzeResponse(BaseModel):
+class DocumentAnalysisResult(BaseModel):
+    """Gemini analysis for an existing stored document."""
+
     doc_id: str
-    model: str
-    analysis: str
+    analysis_model: str
+    recommendations_text: str
 
 
 

@@ -56,7 +56,7 @@ fambot_backend/
   app.py                    # FastAPI app, CORS, include_router, uvicorn runner
   cardio_features.py        # FEATURE_ORDER shared with model.py; build_feature_frame
   schemas.py                # Pydantic models (API JSON shape)
-  api/routers/              # health, auth, users, invitations, documents (+ /documents/*), chats (/chat*, /chats)
+  api/routers/              # health, auth, users, invitations, documents (/documents/*), chats (/chat*, /chats)
   core/
     deps.py                 # HTTPBearer → JWT → firebase_uid (Firebase Auth uid string)
     jwt_tokens.py           # Mint / verify access tokens (FAMBOT_JWT_SECRET)
@@ -100,7 +100,7 @@ Production on **Render** is documented in **[`README.md`](README.md)** (Firebase
 | `FAMBOT_JWT_EXPIRES_SECONDS` | Access token TTL (defaults documented in `core/jwt_tokens.py` / README). |
 | `FIREBASE_WEB_API_KEY` | Required for `POST /auth/login` (Identity Toolkit). |
 | `FIREBASE_STORAGE_BUCKET` | Required for report uploads to Firebase Storage. |
-| `GEMINI_API_KEY` | Required for document analyze and **Gemini chat** (tools, file search, web grounding). |
+| `GEMINI_API_KEY` | Required for document analysis (`POST /documents` with `analyze=true`, or `POST /documents/{doc_id}/analyze`) and **Gemini chat** (tools, file search, web grounding). |
 | `GEMINI_REPORT_MODEL` | Optional Gemini model override (default `gemini-2.5-flash`). |
 | `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH` | Set to `1` to disable **Grounding with Google Search** (web) in chat. Default: search **on**. |
 | `FAMBOT_GEMINI_DISABLE_FILE_SEARCH` | Set to `1` to disable **Gemini File Search** (RAG) in chat and skip ingesting uploads into a file store. Default: file search **on** when Firestore is used. |

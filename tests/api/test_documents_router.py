@@ -18,15 +18,15 @@ def test_list_documents_empty(
     dry_api_env: None,
 ) -> None:
     list_docs.return_value = []
-    r = client.get("/me/documents")
+    r = client.get("/documents")
     assert r.status_code == 200
-    assert r.json() == {"items": []}
+    assert r.json() == []
 
 
 @pytest.mark.api
 def test_upload_rejects_empty_file(client: TestClient, dry_api_env: None) -> None:
     r = client.post(
-        "/me/documents/upload",
+        "/documents",
         files={"file": ("empty.txt", BytesIO(b""), "text/plain")},
     )
     assert r.status_code == 400
@@ -35,20 +35,25 @@ def test_upload_rejects_empty_file(client: TestClient, dry_api_env: None) -> Non
 
 @pytest.mark.api
 @patch("fambot_backend.api.routers.documents.upload_user_document")
+@patch("fambot_backend.api.routers.documents.ingest_bytes_to_file_search")
 def test_upload_success_mocked(
+    _ingest: object,
     upload: object,
     client: TestClient,
     dry_api_env: None,
 ) -> None:
     upload.return_value = ("documents/u1/report.pdf", "gs://bucket/documents/u1/report.pdf")
     r = client.post(
-        "/me/documents/upload",
+        "/documents",
         files={"file": ("report.pdf", BytesIO(b"%PDF-1.4"), "application/pdf")},
     )
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["file_name"] == "report.pdf"
+    assert data["filename"] == "report.pdf"
+    assert data["id"] == "report.pdf"
     assert data["storage_path"].endswith("report.pdf")
+    assert data["analysis_model"] is None
+    assert data["recommendations_text"] is None
 
 
 @pytest.mark.api
@@ -69,17 +74,21 @@ def test_list_documents_returns_items(
             "updated_at": now,
         }
     ]
-    r = client.get("/me/documents")
+    r = client.get("/documents")
     assert r.status_code == 200
-    items = r.json()["items"]
+    items = r.json()
     assert len(items) == 1
-    assert items[0]["file_name"] == "a.pdf"
+    assert items[0]["filename"] == "a.pdf"
+    assert items[0]["id"] == "a.pdf"
+    assert items[0]["size_bytes"] == 12
 
 
 @pytest.mark.api
 @patch("fambot_backend.api.routers.documents.analyze_uploaded_document")
 @patch("fambot_backend.api.routers.documents.upload_user_document")
-def test_analyze_uploaded_document_mocked(
+@patch("fambot_backend.api.routers.documents.ingest_bytes_to_file_search")
+def test_upload_with_analyze_mocked(
+    _ingest: object,
     upload: object,
     analyze: object,
     client: TestClient,
@@ -91,15 +100,15 @@ def test_analyze_uploaded_document_mocked(
         "analysis": "Stay active. Not a diagnosis.",
     }
     r = client.post(
-        "/me/documents/analyze",
+        "/documents",
         files={"file": ("lab.pdf", BytesIO(b"%PDF-1.4"), "application/pdf")},
+        data={"analyze": "true"},
     )
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["file_name"] == "lab.pdf"
-    assert data["storage_path"].endswith("lab.pdf")
+    assert data["filename"] == "lab.pdf"
     assert data["analysis_model"] == "gemini-test"
-    assert "Stay active" in data["recommendations_text"]
+    assert "Stay active" in (data["recommendations_text"] or "")
     analyze.assert_called_once()
     kw = analyze.call_args.kwargs
     assert kw["uid"] == "dev-user"
@@ -109,7 +118,7 @@ def test_analyze_uploaded_document_mocked(
 
 @pytest.mark.api
 @patch("fambot_backend.api.routers.documents.analyze_stored_document")
-def test_analyze_stored_document_compat_mocked(
+def test_analyze_stored_document_mocked(
     analyze: object,
     client: TestClient,
     dry_api_env: None,
@@ -119,6 +128,6 @@ def test_analyze_stored_document_compat_mocked(
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["doc_id"] == "doc-1"
-    assert data["model"] == "gemini-x"
-    assert data["analysis"] == "Summary text."
+    assert data["analysis_model"] == "gemini-x"
+    assert data["recommendations_text"] == "Summary text."
     analyze.assert_called_once_with(uid="dev-user", doc_id="doc-1")

@@ -90,15 +90,23 @@ def get_user_document_payload(storage_path: str) -> bytes:
 
 def get_user_document(uid: str, doc_id: str) -> dict[str, Any]:
     """Resolve one user document by id (filename)."""
+    init_firebase()
+    bucket = storage.bucket()
+    bucket_name = bucket.name or ""
     for item in list_user_documents(uid):
         if item.get("file_name") == doc_id:
             created = item.get("updated_at")
+            storage_path = item.get("storage_path")
+            storage_uri = item.get("storage_uri")
+            if not storage_uri and bucket_name and isinstance(storage_path, str):
+                storage_uri = f"gs://{bucket_name}/{storage_path}"
             return {
                 "id": doc_id,
                 "filename": doc_id,
                 "content_type": item.get("content_type") or "application/octet-stream",
                 "size": int(item.get("size_bytes") or 0),
-                "storage_path": item.get("storage_path"),
+                "storage_path": storage_path,
+                "storage_uri": storage_uri if isinstance(storage_uri, str) else None,
                 "created_at": created,
             }
     raise HTTPException(status_code=404, detail="Document not found")

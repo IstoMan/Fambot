@@ -6,7 +6,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
 
 **Breaking change:** HTTP routes no longer use a `/v1/` prefix. Clients must call `/auth/…`, `/me/…`, and `/health` directly (for example `POST /auth/login` instead of `POST /v1/auth/login`).
 
-**API 0.5.0:** Family invitations (`/me/family/…`) with single-use expiring links, QR PNG (base64), and perspective-aware relationship labels. **API 0.4.0** onboarding: `PUT /me/onboarding` uses cardiovascular-aligned fields (gender, BP, cholesterol and **`gluc_ordinal`** survey tiers, optional lifestyle flags). See [Onboarding](#put-meonboarding) below.
+**API 0.6.0:** Documents are only under `/documents` (removed `/me/documents/*` and `POST /documents/upload`); upload is `POST /documents` with optional form field `analyze=true`. **API 0.5.0:** Family invitations (`/me/family/…`) with single-use expiring links, QR PNG (base64), and perspective-aware relationship labels. **API 0.4.0** onboarding: `PUT /me/onboarding` uses cardiovascular-aligned fields (gender, BP, cholesterol and **`gluc_ordinal`** survey tiers, optional lifestyle flags). See [Onboarding](#put-meonboarding) below.
 
 ---
 
@@ -23,10 +23,8 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Adds optional **family-group features** when the user belongs to a group: relationship-weighted aggregates of **other members’** stored risk scores (from their completed onboarding only). First-degree roles (`mother`, `father`, `son`, `daughter`, `brother`, `sister`, `husband`, `wife`) weight **1.0**; `uncle`, `aunt`, `nephew`, `niece` weight **0.5**; if no relationship edge exists for a peer, weight **0.65**. If no group or no peer scores, those columns are missing and **median-imputed** like omitted lifestyle flags.
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
-- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Each turn **always** sends the user’s **profile and cardiovascular risk** in the model context; **stored** documents are **not** preloaded (smaller context). The model can use **tools** to list documents, **include** a specific stored file, and load **family members’** app-recorded **risk** summaries. **Grounding with Google Search** (web) is on by default; set `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH=1` to turn it off. **Gemini File Search** (managed RAG) indexes each user’s uploaded documents when `POST /me/documents/upload` (or compatible upload paths) runs; set `FAMBOT_GEMINI_DISABLE_FILE_SEARCH=1` to skip RAG. The user’s file search store name is stored on `users/{uid}` as `fileSearchStoreName`. The `/stream` route may **buffer** until the tool + search turn completes, then **chunks** the final text for SSE.
-- **Document upload + retrieval** (`POST /me/documents/upload`, `GET /me/documents`) that stores reports in Firebase Storage under `documents/{uid}/...` and lists files for the authenticated user.
-- **Document analysis** (`POST /me/documents/analyze`) uploads a hospital/lab document, loads the user’s Firestore profile (vitals, risk, habits), sends the file to **Gemini** (File API upload + `generate_content`), and returns prevention and lifestyle recommendations as text.
-- **FeverApp-compatible document endpoints** (`/documents/upload`, `/documents`, `/documents/{doc_id}`, `/documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`) for easier endpoint-path migration.
+- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Each turn **always** sends the user’s **profile and cardiovascular risk** in the model context; **stored** documents are **not** preloaded (smaller context). The model can use **tools** to list documents, **include** a specific stored file, and load **family members’** app-recorded **risk** summaries. **Grounding with Google Search** (web) is on by default; set `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH=1` to turn it off. **Gemini File Search** (managed RAG) indexes each user’s uploaded documents when `POST /documents` runs; set `FAMBOT_GEMINI_DISABLE_FILE_SEARCH=1` to skip RAG. The user’s file search store name is stored on `users/{uid}` as `fileSearchStoreName`. The `/stream` route may **buffer** until the tool + search turn completes, then **chunks** the final text for SSE.
+- **Documents** (`GET /documents`, `POST /documents`, `GET /documents/{doc_id}`, `POST /documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`): upload/list/get/delete medical reports in Firebase Storage under `documents/{uid}/...`; optional **Gemini** analysis on upload (`multipart` form `analyze=true`) or on a stored file by id.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
 
 ---
@@ -153,7 +151,7 @@ Interactive docs (when the server is up):
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON for ADC (typical for local dev). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated list of allowed origins for CORS. Default `*` (single origin string `*` in the list). Strip whitespace around entries. |
 | `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name used for report uploads (for example `my-project.appspot.com`). |
-| `GEMINI_API_KEY` | API key for Gemini; required for document analysis and **chat** (including File Search indexing on upload). |
+| `GEMINI_API_KEY` | API key for Gemini; required for document analysis (`POST /documents` with `analyze=true`, or `POST /documents/{doc_id}/analyze`) and **chat** (including File Search indexing on upload). |
 | `GEMINI_REPORT_MODEL` | Optional Gemini model name (default `gemini-2.5-flash`). |
 | `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH` | Set to `1` to **disable** Grounding with **Google Search** (web) in chat. Omitted or other values: **search enabled** (default). |
 | `FAMBOT_GEMINI_DISABLE_FILE_SEARCH` | Set to `1` to **disable** Gemini **File Search** (per-user RAG) in chat and skip indexing uploads into a file store. Omitted: **file search enabled** when Firestore is in use. |
@@ -288,49 +286,43 @@ Family-aware inputs are **not** part of the JSON body; they are read from the au
 
 ---
 
-### `POST /me/documents/upload`
+### Documents (`/documents`)
 
-**Auth:** `Authorization: Bearer <JWT>`.
+All paths require `Authorization: Bearer <JWT>`. Document ids are the stored **filename** under `documents/{uid}/`.
 
-**Content type:** `multipart/form-data`.
+#### `GET /documents`
 
-**Form fields:**
+Lists the authenticated user’s files from Storage.
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `file` | file | yes | Medical report/document to upload. |
+**Response:** JSON array of `DocumentItem` objects: `id`, `filename`, `content_type`, `size_bytes`, `storage_path`, `storage_uri`, `updated_at`, optional `type`, and `analysis_model` / `recommendations_text` (null when not from an analyzed upload).
 
-The endpoint uploads the file to Firebase Storage in `documents/{uid}/{filename}`.
-
-**Response** (`DocumentUploadOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`.
-
-**Errors:** `400` empty or invalid upload; `401` auth failures; `500` missing server configuration (`FIREBASE_STORAGE_BUCKET`).
-
-### `POST /me/documents/analyze`
-
-**Auth:** `Authorization: Bearer <JWT>`.
+#### `POST /documents`
 
 **Content type:** `multipart/form-data`.
 
-**Form fields:**
-
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `file` | file | yes | Hospital report, lab PDF, image, etc. |
+| `file` | file | yes | Medical report or document. |
+| `type` | string | no | Optional classification (`DocumentType` enum; same values as before). |
+| `analyze` | bool | no | Default `false`. If `true`, saves the file then runs Gemini with Firestore profile context; `analysis_model` and `recommendations_text` are set on the response. |
 
-The server saves the file under `documents/{uid}/...`, reads `users/{uid}` from Firestore for context (age, BP, BMI, risk score/class, lifestyle flags when present), uploads the file to Gemini, and returns structured prevention and lifestyle guidance.
+**Response** (`DocumentItem`): upload metadata; when `analyze=true`, includes `analysis_model` and `recommendations_text`.
 
-**Response** (`DocumentAnalyzeOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`, `analysis_model`, `recommendations_text`.
+**Errors:** `400` empty upload; `401` auth; `500` missing `FIREBASE_STORAGE_BUCKET`; `500`/`502` when `analyze=true` and Gemini is misconfigured or fails.
 
-**Errors:** `400` empty upload; `401` auth; `500` missing `GEMINI_API_KEY` or Storage config; `502` Gemini failure or empty response.
+#### `GET /documents/{doc_id}`
 
-### `GET /me/documents`
+Returns one `DocumentItem` for a user-owned object.
 
-**Auth:** `Authorization: Bearer <JWT>`.
+#### `POST /documents/{doc_id}/analyze`
 
-Returns files stored for the authenticated user from the Storage prefix `documents/{uid}/`.
+Runs Gemini analysis for an **already stored** document.
 
-**Response** (`UserDocumentsListOut`): `items[]` with `file_name`, `content_type`, `storage_path`, `storage_uri`, `size_bytes`, `updated_at`.
+**Response** (`DocumentAnalysisResult`): `doc_id`, `analysis_model`, `recommendations_text`.
+
+#### `DELETE /documents/{doc_id}`
+
+Deletes the object from Firebase Storage. **Response:** `{"status":"success","detail":"Document deleted"}`.
 
 ---
 
@@ -391,33 +383,6 @@ Sends **user profile + cardiovascular risk** and recent chat history on every tu
 **Auth:** `Authorization: Bearer <JWT>`.
 
 Returns chronological messages for the chat with `role`, `content`, `created_at`, optional `citations`, and optional `has_file`.
-
----
-
-### FeverApp-Compatible Document Paths
-
-All paths below require `Authorization: Bearer <JWT>` and mirror FeverApp route naming for migration compatibility.
-
-### `POST /documents/upload`
-
-`multipart/form-data` with `file` (required) and `type` (optional document classification).  
-Returns `FeverDocumentResponse`.
-
-### `GET /documents`
-
-Returns list of `FeverDocumentResponse`.
-
-### `GET /documents/{doc_id}`
-
-Returns one `FeverDocumentResponse` for the user-owned document.
-
-### `POST /documents/{doc_id}/analyze`
-
-Runs Gemini analysis for an existing stored document and returns `DocumentAnalyzeResponse`.
-
-### `DELETE /documents/{doc_id}`
-
-Deletes one user-owned document from Firebase Storage.
 
 ---
 
