@@ -186,7 +186,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `services/family_risk_aggregate.py`, `api/routers/invitations.py`, `schemas.py` |
 | Report upload + retrieval | `api/routers/documents.py`, `services/document_storage.py`, `core/firebase_init.py`, `schemas.py` |
 | Document analyze (Gemini + profile) | `api/routers/documents.py`, `services/gemini_document_analysis.py`, `services/firestore_users.py`, `schemas.py` |
-| Chat sessions + message history | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `schemas.py` |
+| Chat sessions + message history (incl. `POST /chat/{id}/stream` SSE) | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |

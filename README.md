@@ -23,7 +23,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Adds optional **family-group features** when the user belongs to a group: relationship-weighted aggregates of **other members’** stored risk scores (from their completed onboarding only). First-degree roles (`mother`, `father`, `son`, `daughter`, `brother`, `sister`, `husband`, `wife`) weight **1.0**; `uncle`, `aunt`, `nephew`, `niece` weight **0.5**; if no relationship edge exists for a peer, weight **0.65**. If no group or no peer scores, those columns are missing and **median-imputed** like omitted lifestyle flags.
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
-- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `GET /chat/{chat_id}/history`) with Firestore-backed chat threads and Gemini-generated replies grounded in uploaded documents and user profile context.
+- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed chat threads and Gemini-generated replies grounded in uploaded documents and user profile context. The `/stream` route returns **Server-Sent Events** so the model reply is delivered incrementally; the non-streaming `POST /chat/{chat_id}` still returns a single JSON body.
 - **Document upload + retrieval** (`POST /me/documents/upload`, `GET /me/documents`) that stores reports in Firebase Storage under `documents/{uid}/...` and lists files for the authenticated user.
 - **Document analysis** (`POST /me/documents/analyze`) uploads a hospital/lab document, loads the user’s Firestore profile (vitals, risk, habits), sends the file to **Gemini** (File API upload + `generate_content`), and returns prevention and lifestyle recommendations as text.
 - **FeverApp-compatible document endpoints** (`/documents/upload`, `/documents`, `/documents/{doc_id}`, `/documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`) for easier endpoint-path migration.
@@ -363,6 +363,26 @@ Lists chat sessions for the authenticated user ordered by `last_updated` descend
 | `file` | file | no | Optional attachment for this turn. |
 
 Loads recent chat history and up to 3 recent user documents for context, generates a Gemini reply, saves both user+model turns under `users/{uid}/chats/{chat_id}/messages`, and updates chat `last_updated` (and generated title for first turn when available).
+
+**Response** (`ChatInteractionResponse`): `role` (`model`), `content`, optional `citations`, optional `new_title`.
+
+### `POST /chat/{chat_id}/stream`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+**Content type:** `multipart/form-data` (same fields as `POST /chat/{chat_id}`: `message` required, `file` optional).
+
+**Response:** `text/event-stream` (Server-Sent Events). Each line is a `data:` line whose payload is a JSON object:
+
+| `type` | Shape |
+|--------|--------|
+| `text` | `{"type":"text","text":"<chunk>"}` — one or more chunks of the assistant reply. If the model returns no text, a single chunk contains the same fallback message as the non-streaming route. |
+| `done` | `{"type":"done","new_title": string \| null, "citations": null}` — sent after the full reply is persisted. |
+| `error` | `{"type":"error","detail":"<message>"}` — only if the stream has already started; use this for client-side error UI. |
+
+**Client note:** the browser’s native `EventSource` only supports **GET** requests. For this **POST** endpoint, use `fetch` with a streaming body reader (or an equivalent) and parse `data: …` lines. Do not use `EventSource` for this route.
+
+**Errors:** `404` if the chat id does not exist. If the generation fails before any bytes are sent, a normal JSON error body may be returned (e.g. `502` from upstream Gemini). Same persistence rules as `POST /chat/{chat_id}`: user and model messages are written to Firestore only after a successful generation.
 
 ### `GET /chat/{chat_id}/history`
 

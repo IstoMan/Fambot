@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -14,6 +15,10 @@ from fambot_backend.services.document_storage import (
     list_user_documents,
 )
 from fambot_backend.services.firestore_users import get_user_profile
+
+CHAT_ASSISTANT_FALLBACK = (
+    "I wasn't able to generate a response just now. Please try again in a moment."
+)
 
 
 def _get_client():
@@ -109,7 +114,7 @@ def analyze_stored_document(*, uid: str, doc_id: str) -> dict[str, str]:
     )
 
 
-def generate_chat_turn(
+def _prepare_chat_turn(
     *,
     uid: str,
     user_message: str,
@@ -117,7 +122,7 @@ def generate_chat_turn(
     upload_name: str | None = None,
     upload_content_type: str | None = None,
     upload_payload: bytes | None = None,
-) -> dict[str, Any]:
+) -> tuple[Any, str, list[Any]]:
     client = _get_client()
     model_name = _model_name()
     docs = list_user_documents(uid)[:3]
@@ -176,44 +181,96 @@ def generate_chat_turn(
         {user_message}
         """
     ).strip()
+    return client, model_name, [*gemini_parts, prompt]
 
+
+def maybe_new_chat_title(
+    *, user_message: str, history: list[dict[str, Any]] | None = None
+) -> str | None:
+    history = history or []
+    if any(str(row.get("role")) == "user" for row in history):
+        return None
+    client = _get_client()
+    model_name = _model_name()
+    try:
+        title_response = client.models.generate_content(
+            model=model_name,
+            contents=(
+                "Generate a short chat title (max 5 words, plain text only) for: "
+                f"{user_message}"
+            ),
+        )
+    except Exception:
+        return None
+    candidate = (title_response.text or "").strip().strip('"').strip("'")
+    return candidate or None
+
+
+def generate_chat_turn(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None = None,
+    upload_name: str | None = None,
+    upload_content_type: str | None = None,
+    upload_payload: bytes | None = None,
+) -> dict[str, Any]:
+    client, model_name, contents = _prepare_chat_turn(
+        uid=uid,
+        user_message=user_message,
+        history=history,
+        upload_name=upload_name,
+        upload_content_type=upload_content_type,
+        upload_payload=upload_payload,
+    )
     try:
         response = client.models.generate_content(
             model=model_name,
-            contents=[*gemini_parts, prompt],
+            contents=contents,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}") from exc
 
     text = (response.text or "").strip()
     if not text:
-        text = (
-            "I wasn't able to generate a response just now. "
-            "Please try again in a moment."
-        )
+        text = CHAT_ASSISTANT_FALLBACK
 
-    new_title: str | None = None
-    if not any(str(row.get("role")) == "user" for row in history):
-        try:
-            title_response = client.models.generate_content(
-                model=model_name,
-                contents=(
-                    "Generate a short chat title (max 5 words, plain text only) for: "
-                    f"{user_message}"
-                ),
-            )
-            candidate = (title_response.text or "").strip().strip('"').strip("'")
-            if candidate:
-                new_title = candidate
-        except Exception:
-            new_title = None
-
+    new_title = maybe_new_chat_title(user_message=user_message, history=history)
     return {
         "model": model_name,
         "content": text,
         "citations": None,
         "new_title": new_title,
     }
+
+
+def generate_chat_turn_stream(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None = None,
+    upload_name: str | None = None,
+    upload_content_type: str | None = None,
+    upload_payload: bytes | None = None,
+) -> Iterator[str]:
+    client, model_name, contents = _prepare_chat_turn(
+        uid=uid,
+        user_message=user_message,
+        history=history,
+        upload_name=upload_name,
+        upload_content_type=upload_content_type,
+        upload_payload=upload_payload,
+    )
+    try:
+        for chunk in client.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+        ):
+            t = getattr(chunk, "text", None) or ""
+            if t:
+                yield t
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}") from exc
 
 
 def chat_with_documents(uid: str, user_query: str | None = None) -> dict[str, str]:
