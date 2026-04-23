@@ -53,5 +53,6 @@ markers = [
     "unit: pure logic, no network or cloud I/O",
     "api: HTTP layer via TestClient; mocks or FAMBOT_SKIP_* flags",
     "external: real network or Google APIs; requires FAMBOT_RUN_EXTERNAL_TESTS=1",
+    "gemini_live: real Gemini API; requires FAMBOT_RUN_GEMINI_LIVE=1 and GEMINI_API_KEY",
 ]
-addopts = "-m 'not external'"
+addopts = "-m 'not external and not gemini_live'"

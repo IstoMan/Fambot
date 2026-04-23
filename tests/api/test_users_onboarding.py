@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
 from fambot_backend.cardio_features import Gender
+from fambot_backend.services.family_risk_aggregate import neutral_family_features
 
 
 @pytest.mark.api
@@ -52,3 +55,60 @@ def test_put_onboarding_invalid_bp(client: TestClient, dry_api_env: None) -> Non
         },
     )
     assert r.status_code == 422
+
+
+@pytest.mark.api
+def test_put_onboarding_risk_reflects_family_features(
+    client: TestClient,
+    dry_api_env: None,
+    clear_model_cache: None,
+) -> None:
+    body = {
+        "age": 42,
+        "height_cm": 172,
+        "weight_kg": 73,
+        "blood_pressure_systolic": 125,
+        "blood_pressure_diastolic": 82,
+        "gender": "female",
+        "cholesterol": 2,
+        "gluc_ordinal": 2,
+        "smokes": False,
+        "drinks_alcohol": None,
+        "physically_active": True,
+    }
+
+    seen_uids: list[str] = []
+
+    def capture_neutral(uid: str) -> dict[str, float | None]:
+        seen_uids.append(uid)
+        return neutral_family_features()
+
+    def high_family(uid: str) -> dict[str, float | None]:
+        seen_uids.append(uid)
+        return {
+            "fam_weighted_mean_risk": 95.0,
+            "fam_max_member_risk": 95.0,
+            "fam_first_deg_mean_risk": 95.0,
+            "fam_any_member_high_risk": 1.0,
+        }
+
+    with patch(
+        "fambot_backend.services.inference.compute_family_risk_feature_row",
+        side_effect=capture_neutral,
+    ):
+        r1 = client.put("/me/onboarding", json=body)
+    assert r1.status_code == 200, r1.text
+    score_neutral = r1.json()["risk_score"]
+    assert seen_uids == ["dev-user"]
+
+    seen_uids.clear()
+    with patch(
+        "fambot_backend.services.inference.compute_family_risk_feature_row",
+        side_effect=high_family,
+    ):
+        r2 = client.put("/me/onboarding", json=body)
+    assert r2.status_code == 200, r2.text
+    score_high = r2.json()["risk_score"]
+    assert seen_uids == ["dev-user"]
+
+    assert abs(score_neutral - score_high) > 0.01
