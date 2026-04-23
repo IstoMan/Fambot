@@ -22,8 +22,10 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Builds a feature row matching the trained pipeline (including derived BMI, pulse pressure, MAP proxy).
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
+- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `GET /chat/{chat_id}/history`) with Firestore-backed chat threads and Gemini-generated replies grounded in uploaded documents and user profile context.
 - **Document upload + retrieval** (`POST /me/documents/upload`, `GET /me/documents`) that stores reports in Firebase Storage under `documents/{uid}/...` and lists files for the authenticated user.
 - **Document analysis** (`POST /me/documents/analyze`) uploads a hospital/lab document, loads the user’s Firestore profile (vitals, risk, habits), sends the file to **Gemini** (File API upload + `generate_content`), and returns prevention and lifestyle recommendations as text.
+- **FeverApp-compatible document endpoints** (`/documents/upload`, `/documents`, `/documents/{doc_id}`, `/documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`) for easier endpoint-path migration.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
 
 ---
@@ -263,7 +265,7 @@ Returns the **stored** cardiovascular risk from Firestore (`riskScore` / `riskCl
 |-------|------|----------|-------|
 | `file` | file | yes | Medical report/document to upload. |
 
-The endpoint uploads the file to Firebase Storage in `documents/{uid}/{uuid}.{ext}`.
+The endpoint uploads the file to Firebase Storage in `documents/{uid}/{filename}`.
 
 **Response** (`DocumentUploadOut`): `file_name`, `content_type`, `storage_path`, `storage_uri`.
 
@@ -294,6 +296,73 @@ The server saves the file under `documents/{uid}/...`, reads `users/{uid}` from 
 Returns files stored for the authenticated user from the Storage prefix `documents/{uid}/`.
 
 **Response** (`UserDocumentsListOut`): `items[]` with `file_name`, `content_type`, `storage_path`, `storage_uri`, `size_bytes`, `updated_at`.
+
+---
+
+### `POST /chat/new`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+**JSON body** (`ChatCreateRequest`):
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `chat_id` | string | no | If omitted, server generates a UUID. |
+| `title` | string | no | Defaults to `New Chat`. |
+
+Creates a Firestore chat session at `users/{uid}/chats/{chat_id}`.
+
+### `GET /chats`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+Lists chat sessions for the authenticated user ordered by `last_updated` descending.
+
+### `POST /chat/{chat_id}`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+**Content type:** `multipart/form-data`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `message` | string | yes | User prompt text. |
+| `file` | file | no | Optional attachment for this turn. |
+
+Loads recent chat history and up to 3 recent user documents for context, generates a Gemini reply, saves both user+model turns under `users/{uid}/chats/{chat_id}/messages`, and updates chat `last_updated` (and generated title for first turn when available).
+
+### `GET /chat/{chat_id}/history`
+
+**Auth:** `Authorization: Bearer <JWT>`.
+
+Returns chronological messages for the chat with `role`, `content`, `created_at`, optional `citations`, and optional `has_file`.
+
+---
+
+### FeverApp-Compatible Document Paths
+
+All paths below require `Authorization: Bearer <JWT>` and mirror FeverApp route naming for migration compatibility.
+
+### `POST /documents/upload`
+
+`multipart/form-data` with `file` (required) and `type` (optional document classification).  
+Returns `FeverDocumentResponse`.
+
+### `GET /documents`
+
+Returns list of `FeverDocumentResponse`.
+
+### `GET /documents/{doc_id}`
+
+Returns one `FeverDocumentResponse` for the user-owned document.
+
+### `POST /documents/{doc_id}/analyze`
+
+Runs Gemini analysis for an existing stored document and returns `DocumentAnalyzeResponse`.
+
+### `DELETE /documents/{doc_id}`
+
+Deletes one user-owned document from Firebase Storage.
 
 ---
 

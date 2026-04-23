@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from enum import Enum
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -206,6 +207,65 @@ class UserDocumentOut(BaseModel):
 class UserDocumentsListOut(BaseModel):
     items: list[UserDocumentOut]
 
+
+class DocumentAnalyzeOut(BaseModel):
+    file_name: str
+    content_type: str
+    storage_path: str
+    storage_uri: str
+    analysis_model: str
+    recommendations_text: str
+
+
+class ChatCreateRequest(BaseModel):
+    chat_id: str | None = None
+    title: str | None = "New Chat"
+
+
+class MessageResponse(BaseModel):
+    role: str
+    content: str
+    created_at: datetime
+    citations: list[dict[str, Any]] | None = None
+    has_file: bool | None = None
+
+
+class ChatInteractionResponse(BaseModel):
+    role: str
+    content: str
+    citations: list[dict[str, Any]] | None = None
+    new_title: str | None = None
+
+
+class ChatResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+    last_updated: datetime
+
+
+class DocumentType(str, Enum):
+    LAB_REPORT = "Lab Report"
+    PRESCRIPTION = "Prescription"
+    INSURANCE = "Insurance"
+    SCAN_XRAY = "Scan / X-Ray"
+    OTHER = "other"
+
+
+class FeverDocumentResponse(BaseModel):
+    id: str
+    filename: str
+    type: DocumentType | None = None
+    content_type: str
+    size: int
+    storage_path: str | None = None
+    created_at: datetime
+
+
+class DocumentAnalyzeResponse(BaseModel):
+    doc_id: str
+    model: str
+    analysis: str
 
 
 

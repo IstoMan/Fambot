@@ -56,7 +56,7 @@ fambot_backend/
   app.py                    # FastAPI app, CORS, include_router, uvicorn runner
   cardio_features.py        # FEATURE_ORDER shared with model.py; build_feature_frame
   schemas.py                # Pydantic models (API JSON shape)
-  api/routers/              # health, auth, users, invitations, documents (/me/*)
+  api/routers/              # health, auth, users, invitations, documents (+ /documents/*), chats (/chat*, /chats)
   core/
     deps.py                 # HTTPBearer → JWT → firebase_uid (Firebase Auth uid string)
     jwt_tokens.py           # Mint / verify access tokens (FAMBOT_JWT_SECRET)
@@ -65,8 +65,9 @@ fambot_backend/
     inference.py            # MODEL_PATH, joblib load, predict_risk
     identity_toolkit.py     # signInWithPassword for POST /auth/login
     firestore_users.py      # get_user_profile, upsert_onboarding, ensure_user_document, familyGroupId helpers
-    document_storage.py     # upload/list reports in Firebase Storage (documents/{uid}/...)
-    gemini_document_analysis.py  # Gemini File API + profile context → prevention/lifestyle text
+    document_storage.py     # upload/list/get/delete reports in Firebase Storage (documents/{uid}/...)
+    gemini_document_analysis.py  # Gemini chat+analysis orchestration with profile/doc context
+    chat_history.py         # Firestore-backed chat sessions/messages under users/{uid}/chats/*
     family_invites.py       # family groups, invites, QR payload, accept/remove flows
     family_roles.py         # reciprocal family role mapping (vocabulary)
 model.py                    # Offline training; LR vs XGB vs HistGradientBoosting; saves champion
@@ -181,6 +182,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `api/routers/invitations.py`, `schemas.py` |
 | Report upload + retrieval | `api/routers/documents.py`, `services/document_storage.py`, `core/firebase_init.py`, `schemas.py` |
 | Document analyze (Gemini + profile) | `api/routers/documents.py`, `services/gemini_document_analysis.py`, `services/firestore_users.py`, `schemas.py` |
+| Chat sessions + message history | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |

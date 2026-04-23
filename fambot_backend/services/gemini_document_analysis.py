@@ -8,97 +8,218 @@ from typing import Any
 
 from fastapi import HTTPException
 
-
 from fambot_backend.services.document_storage import (
+    get_user_document,
     get_user_document_payload,
     list_user_documents,
 )
+from fambot_backend.services.firestore_users import get_user_profile
 
 
-
-
-
-def chat_with_documents(uid: str, user_query: str | None = None) -> dict[str, str]:
-    """
-    Fetch user reports from storage, upload to Gemini ephemeral API, and chat with them.
-    """
+def _get_client():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY required")
-
     from google import genai
-    client = genai.Client(api_key=api_key)
-    
-    # Using the model name confirmed from your terminal list
-    model_name = os.environ.get("GEMINI_REPORT_MODEL", "gemini-2.5-flash")
 
-    # 1. Get recent documents (limit to top 3 for speed/token reasons)
-    docs = list_user_documents(uid)[:3]
-    
-    # 2. Prepare Gemini files
-    gemini_files = []
-    temp_files = []
+    return genai.Client(api_key=api_key)
+
+
+def _upload_bytes(client: Any, *, file_name: str, content_type: str, payload: bytes) -> Any:
+    suffix = Path(file_name).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(payload)
+        tmp.flush()
+        temp_name = tmp.name
     try:
-        for d in docs:
-            payload = get_user_document_payload(d["storage_path"])
-            suffix = Path(d["file_name"]).suffix or ".bin"
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                tmp.write(payload)
-                tmp.flush()
-                temp_files.append(tmp.name)
-                
-                uploaded = client.files.upload(
-                    file=tmp.name, 
-                    config={"mime_type": d["content_type"]}
-                )
-                gemini_files.append(uploaded)
+        return client.files.upload(file=temp_name, config={"mime_type": content_type})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Gemini file upload failed: {exc}") from exc
+    finally:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
 
-        # 3. Build prompt
-        query = user_query or "Summarize my health based on these reports."
-        
-        # User profile context (imported here to avoid circulars if any, but it's safe)
-        from fambot_backend.services.firestore_users import get_user_profile
-        profile = get_user_profile(uid)
-        profile_data = profile.model_dump(mode="json", exclude_none=True)
-        context_lines = [f"- {k}: {v}" for k, v in sorted(profile_data.items()) if v]
-        context_block = "\n".join(context_lines) if context_lines else "(No profile data)"
 
-        prompt = dedent(
-            f"""
-            You are a Fambot Health Assistant. You have access to the user's uploaded medical reports and their profile.
-            
-            USER QUERY: {query}
-            
-            USER PROFILE:
-            {context_block}
-            
-            GOAL:
-            - Answer the query using the documents as the primary source.
-            - Provide clear prevention and lifestyle recommendations.
-            - Be professional, non-alarmist, and concise.
-            - End with a medical advice disclaimer.
-            """
-        ).strip()
+def _profile_context(uid: str) -> str:
+    profile = get_user_profile(uid)
+    profile_data = profile.model_dump(mode="json", exclude_none=True)
+    lines = [f"- {k}: {v}" for k, v in sorted(profile_data.items()) if v is not None]
+    return "\n".join(lines) if lines else "(No profile data)"
 
-        # 4. Generate
-        contents = gemini_files + [prompt]
+
+def _model_name() -> str:
+    return os.environ.get("GEMINI_REPORT_MODEL", "gemini-2.5-flash")
+
+
+def analyze_uploaded_document(
+    *,
+    uid: str,
+    file_name: str,
+    content_type: str,
+    payload: bytes,
+) -> dict[str, str]:
+    client = _get_client()
+    model_name = _model_name()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    uploaded = _upload_bytes(
+        client,
+        file_name=file_name,
+        content_type=content_type or "application/octet-stream",
+        payload=payload,
+    )
+    context_block = _profile_context(uid)
+    prompt = dedent(
+        """
+        Analyze this medical document and provide practical prevention and lifestyle guidance.
+        Focus on clear, non-alarmist language and mention when medical follow-up is recommended.
+        End with a brief disclaimer that this is not a diagnosis.
+        """
+    ).strip()
+    try:
         response = client.models.generate_content(
             model=model_name,
-            contents=contents
+            contents=[
+                uploaded,
+                f"USER PROFILE:\n{context_block}\n\n{prompt}",
+            ],
         )
-        
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}")
-    finally:
-        # Cleanup temp files
-        for tf in temp_files:
-            try:
-                os.unlink(tf)
-            except:
-                pass
+        raise HTTPException(status_code=502, detail=f"Document analysis failed: {exc}") from exc
+    analysis = (response.text or "").strip()
+    if not analysis:
+        raise HTTPException(status_code=502, detail="Gemini returned empty analysis")
+    return {"model": model_name, "analysis": analysis}
+
+
+def analyze_stored_document(*, uid: str, doc_id: str) -> dict[str, str]:
+    doc = get_user_document(uid, doc_id)
+    storage_path = doc.get("storage_path")
+    if not isinstance(storage_path, str) or not storage_path:
+        raise HTTPException(status_code=500, detail="Document storage path missing")
+    payload = get_user_document_payload(storage_path)
+    return analyze_uploaded_document(
+        uid=uid,
+        file_name=str(doc.get("filename") or doc_id),
+        content_type=str(doc.get("content_type") or "application/octet-stream"),
+        payload=payload,
+    )
+
+
+def generate_chat_turn(
+    *,
+    uid: str,
+    user_message: str,
+    history: list[dict[str, Any]] | None = None,
+    upload_name: str | None = None,
+    upload_content_type: str | None = None,
+    upload_payload: bytes | None = None,
+) -> dict[str, Any]:
+    client = _get_client()
+    model_name = _model_name()
+    docs = list_user_documents(uid)[:3]
+    context_block = _profile_context(uid)
+    history = history or []
+
+    gemini_parts: list[Any] = []
+    for item in docs:
+        storage_path = item.get("storage_path")
+        if not isinstance(storage_path, str) or not storage_path:
+            continue
+        try:
+            payload = get_user_document_payload(storage_path)
+            gemini_parts.append(
+                _upload_bytes(
+                    client,
+                    file_name=str(item.get("file_name") or "document"),
+                    content_type=str(item.get("content_type") or "application/octet-stream"),
+                    payload=payload,
+                )
+            )
+        except HTTPException:
+            continue
+
+    if upload_payload:
+        gemini_parts.append(
+            _upload_bytes(
+                client,
+                file_name=upload_name or "attachment.bin",
+                content_type=upload_content_type or "application/octet-stream",
+                payload=upload_payload,
+            )
+        )
+
+    transcript_lines: list[str] = []
+    for row in history[-20:]:
+        role = str(row.get("role") or "user")
+        content = str(row.get("content") or "").strip()
+        if content:
+            transcript_lines.append(f"{role}: {content}")
+    transcript = "\n".join(transcript_lines) if transcript_lines else "(No history)"
+
+    prompt = dedent(
+        f"""
+        You are Fambot, a health assistant.
+        Use uploaded documents as primary evidence when available.
+        Be concise, professional, and include a brief non-diagnostic disclaimer.
+
+        USER PROFILE:
+        {context_block}
+
+        CHAT HISTORY:
+        {transcript}
+
+        USER MESSAGE:
+        {user_message}
+        """
+    ).strip()
+
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[*gemini_parts, prompt],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chat analysis failed: {exc}") from exc
+
+    text = (response.text or "").strip()
+    if not text:
+        text = (
+            "I wasn't able to generate a response just now. "
+            "Please try again in a moment."
+        )
+
+    new_title: str | None = None
+    if not any(str(row.get("role")) == "user" for row in history):
+        try:
+            title_response = client.models.generate_content(
+                model=model_name,
+                contents=(
+                    "Generate a short chat title (max 5 words, plain text only) for: "
+                    f"{user_message}"
+                ),
+            )
+            candidate = (title_response.text or "").strip().strip('"').strip("'")
+            if candidate:
+                new_title = candidate
+        except Exception:
+            new_title = None
 
     return {
-        "recommendations_text": (response.text or "").strip(),
         "model": model_name,
-        "query_used": query or "General Summary"
+        "content": text,
+        "citations": None,
+        "new_title": new_title,
+    }
+
+
+def chat_with_documents(uid: str, user_query: str | None = None) -> dict[str, str]:
+    result = generate_chat_turn(uid=uid, user_message=user_query or "Summarize my health.", history=[])
+    return {
+        "recommendations_text": str(result.get("content") or "").strip(),
+        "model": str(result.get("model") or _model_name()),
+        "query_used": user_query or "General Summary",
     }
