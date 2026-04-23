@@ -35,7 +35,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-from fambot_backend.cardio_features import BASE_FEATURES, FEATURE_ORDER
+from fambot_backend.cardio_features import BASE_FEATURES, CORE_FEATURE_ORDER, FEATURE_ORDER
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -72,6 +72,23 @@ def _clean_cardio_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     X["bmi"] = X["weight"].astype(float) / (h_m * h_m)
     X["pulse_pressure"] = X["ap_hi"].astype(float) - X["ap_lo"].astype(float)
     X["map_approx"] = (X["ap_hi"].astype(float) + 2.0 * X["ap_lo"].astype(float)) / 3.0
+
+    X = X[CORE_FEATURE_ORDER]
+
+    # Synthetic family aggregates (training set has no real family graph); weakly correlated with y.
+    rng = np.random.default_rng(42)
+    n = len(X)
+    age = X["age_years"].astype(float).to_numpy()
+    bmi_col = X["bmi"].astype(float).to_numpy()
+    y_arr = y.astype(float).to_numpy()
+    signal = np.clip(0.08 * age + 0.12 * bmi_col + 28.0 * y_arr, 0.0, 100.0)
+    noise = rng.uniform(0.0, 100.0, size=n)
+    mean_r = np.clip(0.22 * signal + 0.78 * noise, 0.0, 100.0)
+    X["fam_weighted_mean_risk"] = mean_r
+    X["fam_max_member_risk"] = np.clip(mean_r + rng.uniform(0.0, 12.0, size=n), 0.0, 100.0)
+    X["fam_first_deg_mean_risk"] = np.clip(mean_r + rng.normal(0.0, 6.0, size=n), 0.0, 100.0)
+    ph = 0.08 + 0.32 * y_arr
+    X["fam_any_member_high_risk"] = (rng.random(n) < ph).astype(float)
 
     X = X[FEATURE_ORDER]
     return X, y

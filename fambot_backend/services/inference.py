@@ -9,6 +9,10 @@ import joblib
 
 from fambot_backend.cardio_features import build_feature_frame
 from fambot_backend.schemas import OnboardingIn
+from fambot_backend.services.family_risk_aggregate import (
+    compute_family_risk_feature_row,
+    neutral_family_features,
+)
 
 _ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODEL_PATH = _ROOT / "cardiovascular_model.pkl"
@@ -42,8 +46,17 @@ def _risk_class(score: float) -> Literal["low", "moderate", "high"]:
     return "high"
 
 
-def predict_risk(payload: OnboardingIn) -> tuple[float, Literal["low", "moderate", "high"]]:
+def predict_risk(
+    payload: OnboardingIn,
+    *,
+    subject_uid: str | None = None,
+) -> tuple[float, Literal["low", "moderate", "high"]]:
     """Return risk score 0–100 and class from the pipeline's positive-class probability."""
+    fam = (
+        compute_family_risk_feature_row(subject_uid)
+        if subject_uid
+        else neutral_family_features()
+    )
     X = build_feature_frame(
         age=payload.age,
         height_cm=payload.height_cm,
@@ -56,6 +69,7 @@ def predict_risk(payload: OnboardingIn) -> tuple[float, Literal["low", "moderate
         smokes=payload.smokes,
         drinks_alcohol=payload.drinks_alcohol,
         physically_active=payload.physically_active,
+        **fam,
     )
 
     model = _load_model()

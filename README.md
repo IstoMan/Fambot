@@ -20,6 +20,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Validates body fields with Pydantic.
   - Computes BMI from height and weight.
   - Builds a feature row matching the trained pipeline (including derived BMI, pulse pressure, MAP proxy).
+  - Adds optional **family-group features** when the user belongs to a group: relationship-weighted aggregates of **other members’** stored risk scores (from their completed onboarding only). First-degree roles (`mother`, `father`, `son`, `daughter`, `brother`, `sister`, `husband`, `wife`) weight **1.0**; `uncle`, `aunt`, `nephew`, `niece` weight **0.5**; if no relationship edge exists for a peer, weight **0.65**. If no group or no peer scores, those columns are missing and **median-imputed** like omitted lifestyle flags.
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
@@ -44,7 +45,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
 | Path | Role |
 |------|------|
 | [`fambot_backend/app.py`](fambot_backend/app.py) | FastAPI app factory, CORS, router includes, `run()` for Uvicorn. |
-| [`fambot_backend/cardio_features.py`](fambot_backend/cardio_features.py) | Shared `FEATURE_ORDER`, gender mapping, `build_feature_frame` for inference (must match training). |
+| [`fambot_backend/cardio_features.py`](fambot_backend/cardio_features.py) | Shared `FEATURE_ORDER` (core vitals + family aggregates), gender mapping, `build_feature_frame` for inference (must match training). |
 | [`fambot_backend/api/routers/`](fambot_backend/api/routers/) | HTTP route modules (`health`, `auth`, `me`, `invitations` → `/me/family`). |
 | [`fambot_backend/schemas.py`](fambot_backend/schemas.py) | Pydantic request/response models. |
 | [`fambot_backend/core/deps.py`](fambot_backend/core/deps.py) | JWT Bearer verification → `uid`. |
@@ -85,6 +86,17 @@ Artifacts (by default next to the project root):
 - `cardiovascular_model.pkl` — required at API runtime unless `MODEL_PATH` overrides the location.
 - `cardiovascular_model.threshold.json` — optional training metadata (e.g. OOF threshold); not required for serving the 0–100 score.
 - `feature_importance.png` — bar chart of importances or coefficient magnitudes.
+
+Training injects **synthetic** family aggregate columns (the public `cardio_train` CSV has no family graph); the live API fills the same columns from the user’s family group when available.
+
+---
+
+## Tests
+
+```bash
+uv sync --extra dev
+uv run pytest
+```
 
 ---
 
@@ -236,6 +248,8 @@ Returns the **stored** cardiovascular risk from Firestore (`riskScore` / `riskCl
 | `physically_active` | bool or omit | Omit to impute |
 
 **Response** (`OnboardingOut`): includes updated `profile`, `risk_score` (0–100), and `risk_class`.
+
+Family-aware inputs are **not** part of the JSON body; they are read from the authenticated user’s family group and peer profiles at scoring time (see Features above).
 
 **Risk buckets** (in [`fambot_backend/services/inference.py`](fambot_backend/services/inference.py)):
 

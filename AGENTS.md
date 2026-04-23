@@ -67,6 +67,7 @@ fambot_backend/
     firestore_users.py      # get_user_profile, upsert_onboarding, ensure_user_document, familyGroupId helpers
     family_invites.py       # family groups, invites, QR payload, accept/remove flows
     family_roles.py         # reciprocal family role mapping (vocabulary)
+    family_risk_aggregate.py # peer risk scores + relationship weights for model features
 model.py                    # Offline training; LR vs XGB vs HistGradientBoosting; saves champion
 sources/cardio_train.csv    # Training data (semicolon-separated)
 render.yaml                 # Render Blueprint (build/start, env var names)
@@ -127,7 +128,7 @@ Agents adding new protected routes should use `uid: str = Depends(firebase_uid)`
 
 ## Inference contract
 
-- `predict_risk` builds a **single-row** `pandas.DataFrame` with columns exactly `FEATURE_ORDER` from `cardio_features.py`.
+- `predict_risk` builds a **single-row** `pandas.DataFrame` with columns exactly `FEATURE_ORDER` from `cardio_features.py` (core vitals plus optional **family-group aggregate** columns: weighted mean / max / first-degree mean of peers’ stored `risk_score`, and a binary-style flag for any peer in the high score band).
 - Optional lifestyle fields omitted in the API are passed as **missing values** and imputed by the **fitted `SimpleImputer`** inside the saved pipeline.
 - Risk score is derived from `predict_proba` positive class × 100 when available.
 - `compute_bmi` is used for both persistence; the feature row also includes derived BMI, pulse pressure, and MAP proxy from height/weight/BP.
@@ -173,7 +174,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | New endpoint | `api/routers/`, `app.py` (include router), possibly `schemas.py`; update **README** API section |
 | Change request validation | `schemas.py` |
 | Change Firestore fields | `services/firestore_users.py`, `schemas.py` (read/write models) |
-| Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `api/routers/invitations.py`, `schemas.py` |
+| Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `services/family_risk_aggregate.py`, `api/routers/invitations.py`, `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |
@@ -192,7 +193,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 
 ## Testing status
 
-There is **no** automated test suite in-repo at the time of this document. Agents adding tests should use `pytest` or the project’s chosen runner once introduced; until then, manual checks:
+Optional **`pytest`** via `uv sync --extra dev` and `uv run pytest`. Family aggregate logic is covered under `tests/`. Manual checks still apply for full-stack flows:
 
 - `GET /health` without auth
 - `PUT /me/onboarding` with `FAMBOT_SKIP_AUTH=1` and `FAMBOT_SKIP_FIRESTORE=1` and a trained model present
