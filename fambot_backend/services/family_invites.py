@@ -35,8 +35,8 @@ class _InviteFlowError(Exception):
         self.detail = detail
 
 
-def _as_family_role(raw: str) -> FamilyRole:
-    allowed: set[str] = {
+_FAMILY_ROLE_STRINGS: frozenset[str] = frozenset(
+    {
         "mother",
         "father",
         "son",
@@ -50,7 +50,17 @@ def _as_family_role(raw: str) -> FamilyRole:
         "husband",
         "wife",
     }
-    if raw not in allowed:
+)
+
+
+def _try_family_role(raw: Any) -> FamilyRole | None:
+    if not isinstance(raw, str) or raw not in _FAMILY_ROLE_STRINGS:
+        return None
+    return cast(FamilyRole, raw)
+
+
+def _as_family_role(raw: str) -> FamilyRole:
+    if raw not in _FAMILY_ROLE_STRINGS:
         raise HTTPException(status_code=500, detail="Invalid family role in invite.")
     return cast(FamilyRole, raw)
 
@@ -97,6 +107,59 @@ _skip_invites: dict[str, dict[str, Any]] = {}
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def resolve_user_family_group_id(uid: str) -> str | None:
+    """Family group id for this user, including in-memory mapping when skipping Firestore."""
+    if _skip_firestore():
+        return _skip_user_to_group.get(uid)
+    return get_user_family_group_id(uid)
+
+
+def family_peers_for_scoring(uid: str) -> list[tuple[str, FamilyRole | None]]:
+    """Other group members (uid, role_relative_to_me) for risk aggregation; empty if none."""
+    gid = resolve_user_family_group_id(uid)
+    if not gid:
+        return []
+
+    if _skip_firestore():
+        g = _skip_groups.get(gid)
+        if not g or uid not in g.get("members", set()):
+            return []
+        rels: dict[tuple[str, str], str] = g.get("rels", {})
+        out: list[tuple[str, FamilyRole | None]] = []
+        for m in sorted(g["members"]):
+            if m == uid:
+                continue
+            role_raw = rels.get((uid, m))
+            role = _try_family_role(role_raw)
+            out.append((m, role))
+        return out
+
+    gref = _db().collection("familyGroups").document(gid)
+    gsnap = gref.get()
+    if not gsnap.exists:
+        return []
+    mem_docs = gref.collection("members").stream()
+    member_ids = [d.id for d in mem_docs]
+    if uid not in member_ids:
+        return []
+
+    rels: dict[tuple[str, str], str] = {}
+    for doc in gref.collection("relationships").stream():
+        d = doc.to_dict() or {}
+        fu, tu, r = d.get("fromUid"), d.get("toUid"), d.get("role")
+        if isinstance(fu, str) and isinstance(tu, str) and isinstance(r, str):
+            rels[(fu, tu)] = r
+
+    out2: list[tuple[str, FamilyRole | None]] = []
+    for m in sorted(member_ids):
+        if m == uid:
+            continue
+        rkey = rels.get((uid, m))
+        role2 = _try_family_role(rkey)
+        out2.append((m, role2))
+    return out2
 
 
 def _ensure_owner_group_id(uid: str) -> str:
@@ -440,12 +503,12 @@ def get_family_group(uid: str) -> FamilyGroupOut:
         for m in sorted(g["members"]):
             if m == uid:
                 continue
-            role = rels.get((uid, m))
+            role = _try_family_role(rels.get((uid, m)))
             members_out.append(
                 FamilyMemberOut(
                     uid=m,
                     display_name=_member_display_name(m),
-                    role_relative_to_me=role,  # type: ignore[arg-type]
+                    role_relative_to_me=role,
                 )
             )
         return FamilyGroupOut(group_id=gid, owner_uid=owner_uid, members=members_out)
@@ -482,7 +545,7 @@ def get_family_group(uid: str) -> FamilyGroupOut:
             FamilyMemberOut(
                 uid=m,
                 display_name=_member_display_name(m),
-                role_relative_to_me=rels.get((uid, m)),  # type: ignore[arg-type]
+                role_relative_to_me=_try_family_role(rels.get((uid, m))),
             )
         )
     return FamilyGroupOut(group_id=gid, owner_uid=owner_uid, members=members_out)

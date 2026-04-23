@@ -69,6 +69,7 @@ fambot_backend/
     gemini_document_analysis.py  # Gemini File API + profile context → prevention/lifestyle text
     family_invites.py       # family groups, invites, QR payload, accept/remove flows
     family_roles.py         # reciprocal family role mapping (vocabulary)
+    family_risk_aggregate.py # peer risk scores + relationship weights for model features
 model.py                    # Offline training; LR vs XGB vs HistGradientBoosting; saves champion
 sources/cardio_train.csv    # Training data (semicolon-separated)
 render.yaml                 # Render Blueprint (build/start, env var names)
@@ -135,7 +136,7 @@ Agents adding new protected routes should use `uid: str = Depends(firebase_uid)`
 
 ## Inference contract
 
-- `predict_risk` builds a **single-row** `pandas.DataFrame` with columns exactly `FEATURE_ORDER` from `cardio_features.py`.
+- `predict_risk` builds a **single-row** `pandas.DataFrame` with columns exactly `FEATURE_ORDER` from `cardio_features.py` (core vitals plus optional **family-group aggregate** columns: weighted mean / max / first-degree mean of peers’ stored `risk_score`, and a binary-style flag for any peer in the high score band).
 - Optional lifestyle fields omitted in the API are passed as **missing values** and imputed by the **fitted `SimpleImputer`** inside the saved pipeline.
 - Risk score is derived from `predict_proba` positive class × 100 when available.
 - `compute_bmi` is used for both persistence; the feature row also includes derived BMI, pulse pressure, and MAP proxy from height/weight/BP.
@@ -181,7 +182,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | New endpoint | `api/routers/`, `app.py` (include router), possibly `schemas.py`; update **README** API section |
 | Change request validation | `schemas.py` |
 | Change Firestore fields | `services/firestore_users.py`, `schemas.py` (read/write models) |
-| Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `api/routers/invitations.py`, `schemas.py` |
+| Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `services/family_risk_aggregate.py`, `api/routers/invitations.py`, `schemas.py` |
 | Report upload + retrieval | `api/routers/documents.py`, `services/document_storage.py`, `core/firebase_init.py`, `schemas.py` |
 | Document analyze (Gemini + profile) | `api/routers/documents.py`, `services/gemini_document_analysis.py`, `services/firestore_users.py`, `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |

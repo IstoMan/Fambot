@@ -24,8 +24,17 @@ BASE_FEATURES: list[str] = [
 
 DERIVED_FEATURES: list[str] = ["bmi", "pulse_pressure", "map_approx"]
 
+# Optional family-group aggregates (member app risk scores, relationship-weighted).
+FAMILY_FEATURES: list[str] = [
+    "fam_weighted_mean_risk",
+    "fam_max_member_risk",
+    "fam_first_deg_mean_risk",
+    "fam_any_member_high_risk",
+]
+
 # Full column order for the sklearn Pipeline / DataFrame row.
-FEATURE_ORDER: list[str] = BASE_FEATURES + DERIVED_FEATURES
+CORE_FEATURE_ORDER: list[str] = BASE_FEATURES + DERIVED_FEATURES
+FEATURE_ORDER: list[str] = CORE_FEATURE_ORDER + FAMILY_FEATURES
 
 
 class Gender(str, Enum):
@@ -51,6 +60,12 @@ def _optional_bool_to_float(v: bool | None) -> float:
     return 1.0 if v else 0.0
 
 
+def _optional_float_feature(v: float | None) -> float:
+    if v is None:
+        return float(np.nan)
+    return float(v)
+
+
 def build_feature_frame(
     *,
     age: int,
@@ -64,6 +79,10 @@ def build_feature_frame(
     smokes: bool | None = None,
     drinks_alcohol: bool | None = None,
     physically_active: bool | None = None,
+    fam_weighted_mean_risk: float | None = None,
+    fam_max_member_risk: float | None = None,
+    fam_first_deg_mean_risk: float | None = None,
+    fam_any_member_high_risk: float | None = None,
 ) -> pd.DataFrame:
     """One-row DataFrame matching FEATURE_ORDER for the saved cardiovascular Pipeline."""
     if blood_pressure_systolic <= blood_pressure_diastolic:
@@ -95,6 +114,10 @@ def build_feature_frame(
         "bmi": bmi,
         "pulse_pressure": pulse_pressure,
         "map_approx": map_approx,
+        "fam_weighted_mean_risk": _optional_float_feature(fam_weighted_mean_risk),
+        "fam_max_member_risk": _optional_float_feature(fam_max_member_risk),
+        "fam_first_deg_mean_risk": _optional_float_feature(fam_first_deg_mean_risk),
+        "fam_any_member_high_risk": _optional_float_feature(fam_any_member_high_risk),
     }
 
     return pd.DataFrame([row], columns=FEATURE_ORDER)

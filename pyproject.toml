@@ -22,6 +22,9 @@ dependencies = [
     "google-genai>=1.13.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0"]
+
 [project.scripts]
 model = "model:main"
 api = "fambot_backend.app:run"
