@@ -26,8 +26,8 @@ from fambot_backend.services.chat_history import (
 from fambot_backend.services.gemini_document_analysis import (
     CHAT_ASSISTANT_FALLBACK,
     generate_chat_turn,
-    generate_chat_turn_stream,
     maybe_new_chat_title,
+    run_chat_text_and_citations,
 )
 
 router = APIRouter(tags=["chats"])
@@ -148,23 +148,21 @@ def chat_interaction_stream(
     def event_gen() -> Iterator[bytes]:
         emitted = False
         try:
-            parts: list[str] = []
-            for text_chunk in generate_chat_turn_stream(
+            _m, full_text, stream_citations = run_chat_text_and_citations(
                 uid=uid,
                 user_message=message,
                 history=history,
                 upload_name=file_name,
                 upload_content_type=file_content_type,
                 upload_payload=file_payload,
-            ):
-                parts.append(text_chunk)
-                emitted = True
-                yield _sse_event({"type": "text", "text": text_chunk})
-            full_text = "".join(parts).strip()
-            if not full_text:
+            )
+            if not (full_text or "").strip():
                 full_text = CHAT_ASSISTANT_FALLBACK
-                yield _sse_event({"type": "text", "text": full_text})
+            step = max(1, min(48, max(len(full_text) // 48, 1)))
+            for i in range(0, len(full_text), step):
+                chunk = full_text[i : i + step]
                 emitted = True
+                yield _sse_event({"type": "text", "text": chunk})
             new_title = maybe_new_chat_title(user_message=message, history=history)
             append_chat_message(
                 uid,
@@ -178,7 +176,7 @@ def chat_interaction_stream(
                 chat_id,
                 role="model",
                 content=full_text,
-                citations=None,
+                citations=stream_citations if isinstance(stream_citations, list) else None,
             )
             update_chat_metadata(
                 uid,
@@ -189,7 +187,9 @@ def chat_interaction_stream(
                 {
                     "type": "done",
                     "new_title": new_title if isinstance(new_title, str) else None,
-                    "citations": None,
+                    "citations": stream_citations
+                    if isinstance(stream_citations, list)
+                    else None,
                 }
             )
         except HTTPException as exc:

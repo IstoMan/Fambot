@@ -100,8 +100,10 @@ Production on **Render** is documented in **[`README.md`](README.md)** (Firebase
 | `FAMBOT_JWT_EXPIRES_SECONDS` | Access token TTL (defaults documented in `core/jwt_tokens.py` / README). |
 | `FIREBASE_WEB_API_KEY` | Required for `POST /auth/login` (Identity Toolkit). |
 | `FIREBASE_STORAGE_BUCKET` | Required for report uploads to Firebase Storage. |
-| `GEMINI_API_KEY` | Required for `POST /me/documents/analyze` (Gemini file + recommendations). |
+| `GEMINI_API_KEY` | Required for document analyze and **Gemini chat** (tools, file search, web grounding). |
 | `GEMINI_REPORT_MODEL` | Optional Gemini model override (default `gemini-2.5-flash`). |
+| `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH` | Set to `1` to disable **Grounding with Google Search** (web) in chat. Default: search **on**. |
+| `FAMBOT_GEMINI_DISABLE_FILE_SEARCH` | Set to `1` to disable **Gemini File Search** (RAG) in chat and skip ingesting uploads into a file store. Default: file search **on** when Firestore is used. |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated origins; default allows `*`. |
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token TTL (default 86400; clamped 60–2592000). |
 | `FAMBOT_INVITE_BASE_URL` | Optional prefix for invite URLs embedded in QR codes; if unset, `fambot://family-invite?token=…` is used. |
@@ -186,7 +188,7 @@ Configured in `app.py` via `FAMBOT_CORS_ORIGINS` (comma-separated). Default is p
 | Family invites / roles | `services/family_invites.py`, `services/family_roles.py`, `services/family_risk_aggregate.py`, `api/routers/invitations.py`, `schemas.py` |
 | Report upload + retrieval | `api/routers/documents.py`, `services/document_storage.py`, `core/firebase_init.py`, `schemas.py` |
 | Document analyze (Gemini + profile) | `api/routers/documents.py`, `services/gemini_document_analysis.py`, `services/firestore_users.py`, `schemas.py` |
-| Chat sessions + message history (incl. `POST /chat/{id}/stream` SSE) | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `schemas.py` |
+| Chat (tools, web + file search, incl. `POST /chat/{id}/stream` SSE) | `api/routers/chats.py`, `services/chat_history.py`, `services/gemini_document_analysis.py`, `services/gemini_file_search.py` (RAG store + ingest), `schemas.py` |
 | Change model inputs or imputation | `fambot_backend/cardio_features.py`, `services/inference.py`, possibly `model.py` + retrain |
 | Retrain or change algorithms | `model.py` |
 | Auth behavior | `core/deps.py`, `core/jwt_tokens.py`, `services/identity_toolkit.py`, `core/firebase_init.py` |

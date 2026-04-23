@@ -23,6 +23,7 @@ from fambot_backend.services.gemini_document_analysis import (
     analyze_stored_document,
     analyze_uploaded_document,
 )
+from fambot_backend.services.gemini_file_search import ingest_bytes_to_file_search
 
 router = APIRouter(tags=["documents"])
 
@@ -39,6 +40,15 @@ def upload_my_document(
     if not payload:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     storage_path, storage_uri = upload_user_document(uid, file, payload)
+    try:
+        ingest_bytes_to_file_search(
+            uid,
+            file_name=file.filename,
+            content_type=content_type,
+            payload=payload,
+        )
+    except Exception:
+        pass
     return DocumentUploadOut(
         file_name=file.filename,
         content_type=content_type,
@@ -64,6 +74,15 @@ def analyze_my_uploaded_document(
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     content_type = file.content_type or "application/octet-stream"
     storage_path, storage_uri = upload_user_document(uid, file, payload)
+    try:
+        ingest_bytes_to_file_search(
+            uid,
+            file_name=file.filename,
+            content_type=content_type,
+            payload=payload,
+        )
+    except Exception:
+        pass
     result = analyze_uploaded_document(
         uid=uid,
         file_name=file.filename,
@@ -92,6 +111,15 @@ def upload_document_compat(
     if not payload:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     storage_path, _storage_uri = upload_user_document(uid, file, payload)
+    try:
+        ingest_bytes_to_file_search(
+            uid,
+            file_name=file.filename,
+            content_type=file.content_type or "application/octet-stream",
+            payload=payload,
+        )
+    except Exception:
+        pass
     now = datetime.now(timezone.utc)
     return FeverDocumentResponse(
         id=file.filename,

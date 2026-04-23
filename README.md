@@ -23,7 +23,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Adds optional **family-group features** when the user belongs to a group: relationship-weighted aggregates of **other members’** stored risk scores (from their completed onboarding only). First-degree roles (`mother`, `father`, `son`, `daughter`, `brother`, `sister`, `husband`, `wife`) weight **1.0**; `uncle`, `aunt`, `nephew`, `niece` weight **0.5**; if no relationship edge exists for a peer, weight **0.65**. If no group or no peer scores, those columns are missing and **median-imputed** like omitted lifestyle flags.
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
-- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed chat threads and Gemini-generated replies grounded in uploaded documents and user profile context. The `/stream` route returns **Server-Sent Events** so the model reply is delivered incrementally; the non-streaming `POST /chat/{chat_id}` still returns a single JSON body.
+- **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /chat/{chat_id}`, `POST /chat/{chat_id}/stream`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Each turn **always** sends the user’s **profile and cardiovascular risk** in the model context; **stored** documents are **not** preloaded (smaller context). The model can use **tools** to list documents, **include** a specific stored file, and load **family members’** app-recorded **risk** summaries. **Grounding with Google Search** (web) is on by default; set `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH=1` to turn it off. **Gemini File Search** (managed RAG) indexes each user’s uploaded documents when `POST /me/documents/upload` (or compatible upload paths) runs; set `FAMBOT_GEMINI_DISABLE_FILE_SEARCH=1` to skip RAG. The user’s file search store name is stored on `users/{uid}` as `fileSearchStoreName`. The `/stream` route may **buffer** until the tool + search turn completes, then **chunks** the final text for SSE.
 - **Document upload + retrieval** (`POST /me/documents/upload`, `GET /me/documents`) that stores reports in Firebase Storage under `documents/{uid}/...` and lists files for the authenticated user.
 - **Document analysis** (`POST /me/documents/analyze`) uploads a hospital/lab document, loads the user’s Firestore profile (vitals, risk, habits), sends the file to **Gemini** (File API upload + `generate_content`), and returns prevention and lifestyle recommendations as text.
 - **FeverApp-compatible document endpoints** (`/documents/upload`, `/documents`, `/documents/{doc_id}`, `/documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`) for easier endpoint-path migration.
@@ -153,8 +153,10 @@ Interactive docs (when the server is up):
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON for ADC (typical for local dev). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated list of allowed origins for CORS. Default `*` (single origin string `*` in the list). Strip whitespace around entries. |
 | `FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket name used for report uploads (for example `my-project.appspot.com`). |
-| `GEMINI_API_KEY` | API key for Gemini; required for `POST /me/documents/analyze`. |
+| `GEMINI_API_KEY` | API key for Gemini; required for document analysis and **chat** (including File Search indexing on upload). |
 | `GEMINI_REPORT_MODEL` | Optional Gemini model name (default `gemini-2.5-flash`). |
+| `FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH` | Set to `1` to **disable** Grounding with **Google Search** (web) in chat. Omitted or other values: **search enabled** (default). |
+| `FAMBOT_GEMINI_DISABLE_FILE_SEARCH` | Set to `1` to **disable** Gemini **File Search** (per-user RAG) in chat and skip indexing uploads into a file store. Omitted: **file search enabled** when Firestore is in use. |
 | `FAMBOT_STORAGE_MAKE_PUBLIC` | Optional `1` to make uploaded Storage objects public after upload (default private). |
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token lifetime (default `86400` = 24h; clamped between 60s and 30 days). |
 | `FAMBOT_INVITE_BASE_URL` | Optional URL prefix for invite links and QR payloads (e.g. `https://app.example.com/join`). If unset, invite URLs use the `fambot://family-invite?token=…` scheme. |
@@ -362,9 +364,9 @@ Lists chat sessions for the authenticated user ordered by `last_updated` descend
 | `message` | string | yes | User prompt text. |
 | `file` | file | no | Optional attachment for this turn. |
 
-Loads recent chat history and up to 3 recent user documents for context, generates a Gemini reply, saves both user+model turns under `users/{uid}/chats/{chat_id}/messages`, and updates chat `last_updated` (and generated title for first turn when available).
+Sends **user profile + cardiovascular risk** and recent chat history on every turn (no automatic bulk load of all stored documents). The model may use **function tools** (list stored document names, include a file by name, family risk context), **Gemini File Search** (if the user has a `fileSearchStoreName` and indexing is enabled), and **Grounding with Google Search** (web, unless disabled by env). The optional `file` field is for a **this-turn** attachment only. Persists user+model turns under `users/{uid}/chats/{chat_id}/messages` and updates `last_updated` (and first-turn `new_title` when available).
 
-**Response** (`ChatInteractionResponse`): `role` (`model`), `content`, optional `citations`, optional `new_title`.
+**Response** (`ChatInteractionResponse`): `role` (`model`), `content`, optional `citations` (may include web/file grounding metadata), optional `new_title`.
 
 ### `POST /chat/{chat_id}/stream`
 
@@ -377,7 +379,7 @@ Loads recent chat history and up to 3 recent user documents for context, generat
 | `type` | Shape |
 |--------|--------|
 | `text` | `{"type":"text","text":"<chunk>"}` — one or more chunks of the assistant reply. If the model returns no text, a single chunk contains the same fallback message as the non-streaming route. |
-| `done` | `{"type":"done","new_title": string \| null, "citations": null}` — sent after the full reply is persisted. |
+| `done` | `{"type":"done","new_title": string \| null, "citations": array \| null}` — sent after the full reply is persisted (`citations` may include grounding metadata when search/tools produced it). |
 | `error` | `{"type":"error","detail":"<message>"}` — only if the stream has already started; use this for client-side error UI. |
 
 **Client note:** the browser’s native `EventSource` only supports **GET** requests. For this **POST** endpoint, use `fetch` with a streaming body reader (or an equivalent) and parse `data: …` lines. Do not use `EventSource` for this route.

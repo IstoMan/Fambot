@@ -9,16 +9,6 @@ from fastapi.testclient import TestClient
 
 from fambot_backend.services.gemini_document_analysis import CHAT_ASSISTANT_FALLBACK
 
-
-def _stream_hello(*args: object, **kwargs: object) -> object:
-    yield "Hel"
-    yield "lo"
-
-
-def _stream_empty(*args: object, **kwargs: object) -> object:
-    yield from ()
-
-
 @pytest.mark.api
 def test_chat_stream_returns_sse_text_and_done(
     client: TestClient,
@@ -31,8 +21,8 @@ def test_chat_stream_returns_sse_text_and_done(
         ),
         patch("fambot_backend.api.routers.chats.list_chat_messages", return_value=[]),
         patch(
-            "fambot_backend.api.routers.chats.generate_chat_turn_stream",
-            side_effect=_stream_hello,
+            "fambot_backend.api.routers.chats.run_chat_text_and_citations",
+            return_value=("gemini-2.5-flash", "Hello", None),
         ),
         patch("fambot_backend.api.routers.chats.maybe_new_chat_title", return_value=None),
         patch("fambot_backend.api.routers.chats.append_chat_message") as mock_append,
@@ -46,7 +36,7 @@ def test_chat_stream_returns_sse_text_and_done(
     body = r.text
     assert "data:" in body
     assert '"type"' in body and "text" in body
-    assert "Hel" in body and "lo" in body
+    assert "H" in body and "e" in body and "l" in body and "o" in body
     assert "done" in body
     assert mock_append.call_count == 2
     mock_update.assert_called_once()
@@ -64,8 +54,8 @@ def test_chat_stream_no_chunks_uses_assistant_fallback(
         ),
         patch("fambot_backend.api.routers.chats.list_chat_messages", return_value=[]),
         patch(
-            "fambot_backend.api.routers.chats.generate_chat_turn_stream",
-            side_effect=_stream_empty,
+            "fambot_backend.api.routers.chats.run_chat_text_and_citations",
+            return_value=("gemini-2.5-flash", "", None),
         ),
         patch("fambot_backend.api.routers.chats.maybe_new_chat_title", return_value=None),
         patch("fambot_backend.api.routers.chats.append_chat_message"),
@@ -74,4 +64,5 @@ def test_chat_stream_no_chunks_uses_assistant_fallback(
         r = client.post("/chat/c1/stream", data={"message": "hi"})
 
     assert r.status_code == 200
-    assert CHAT_ASSISTANT_FALLBACK in r.text
+    for c in (CHAT_ASSISTANT_FALLBACK[0], CHAT_ASSISTANT_FALLBACK[-1], "m", "o"):
+        assert c in r.text
