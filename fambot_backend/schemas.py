@@ -208,6 +208,15 @@ class UserDocumentsListOut(BaseModel):
     items: list[UserDocumentOut]
 
 
+class DocumentAnalyzeOut(BaseModel):
+    file_name: str
+    content_type: str
+    storage_path: str
+    storage_uri: str
+    analysis_model: str
+    recommendations_text: str
+
+
 class ChatCreateRequest(BaseModel):
     chat_id: str | None = None
     title: str | None = "New Chat"

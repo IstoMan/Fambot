@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import (
@@ -64,10 +64,8 @@ def chat_interaction(
     file: UploadFile | None = File(None),
     uid: str = Depends(firebase_uid),
 ) -> ChatInteractionResponse:
-    get_chat_or_404 = get_chat(uid, chat_id)
-    if not get_chat_or_404:
-        from fastapi import HTTPException
-
+    chat = get_chat(uid, chat_id)
+    if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
     file_payload: bytes | None = None

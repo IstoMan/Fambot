@@ -86,3 +86,33 @@ def get_user_document_payload(storage_path: str) -> bytes:
     if not blob.exists():
         raise HTTPException(status_code=404, detail="Document not found in storage")
     return blob.download_as_string()
+
+
+def get_user_document(uid: str, doc_id: str) -> dict[str, Any]:
+    """Resolve one user document by id (filename)."""
+    for item in list_user_documents(uid):
+        if item.get("file_name") == doc_id:
+            created = item.get("updated_at")
+            return {
+                "id": doc_id,
+                "filename": doc_id,
+                "content_type": item.get("content_type") or "application/octet-stream",
+                "size": int(item.get("size_bytes") or 0),
+                "storage_path": item.get("storage_path"),
+                "created_at": created,
+            }
+    raise HTTPException(status_code=404, detail="Document not found")
+
+
+def delete_user_document(uid: str, doc_id: str) -> None:
+    """Delete one user document by id (filename)."""
+    item = get_user_document(uid, doc_id)
+    storage_path = item.get("storage_path")
+    if not isinstance(storage_path, str) or not storage_path:
+        raise HTTPException(status_code=500, detail="Document storage path missing")
+    init_firebase()
+    bucket = storage.bucket()
+    blob = bucket.blob(storage_path)
+    if not blob.exists():
+        raise HTTPException(status_code=404, detail="Document not found in storage")
+    blob.delete()
