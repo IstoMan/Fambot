@@ -18,15 +18,15 @@ def test_list_documents_empty(
     dry_api_env: None,
 ) -> None:
     list_docs.return_value = []
-    r = client.get("/me/documents")
+    r = client.get("/documents")
     assert r.status_code == 200
-    assert r.json() == {"items": []}
+    assert r.json() == []
 
 
 @pytest.mark.api
 def test_upload_rejects_empty_file(client: TestClient, dry_api_env: None) -> None:
     r = client.post(
-        "/me/documents/upload",
+        "/documents",
         files={"file": ("empty.txt", BytesIO(b""), "text/plain")},
     )
     assert r.status_code == 400
@@ -42,13 +42,16 @@ def test_upload_success_mocked(
 ) -> None:
     upload.return_value = ("documents/u1/report.pdf", "gs://bucket/documents/u1/report.pdf")
     r = client.post(
-        "/me/documents/upload",
+        "/documents",
         files={"file": ("report.pdf", BytesIO(b"%PDF-1.4"), "application/pdf")},
     )
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["file_name"] == "report.pdf"
+    assert data["filename"] == "report.pdf"
+    assert data["id"] == "report.pdf"
     assert data["storage_path"].endswith("report.pdf")
+    assert data["analysis_model"] is None
+    assert data["recommendations_text"] is None
 
 
 @pytest.mark.api
@@ -69,8 +72,10 @@ def test_list_documents_returns_items(
             "updated_at": now,
         }
     ]
-    r = client.get("/me/documents")
+    r = client.get("/documents")
     assert r.status_code == 200
-    items = r.json()["items"]
+    items = r.json()
     assert len(items) == 1
-    assert items[0]["file_name"] == "a.pdf"
+    assert items[0]["filename"] == "a.pdf"
+    assert items[0]["id"] == "a.pdf"
+    assert items[0]["size_bytes"] == 12

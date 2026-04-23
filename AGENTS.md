@@ -56,7 +56,7 @@ fambot_backend/
   app.py                    # FastAPI app, CORS, include_router, uvicorn runner
   cardio_features.py        # FEATURE_ORDER shared with model.py; build_feature_frame
   schemas.py                # Pydantic models (API JSON shape)
-  api/routers/              # health, auth, users, invitations, documents (+ /documents/*), chats (/chat*, /chats)
+  api/routers/              # health, auth, users, invitations, documents (/documents/*), chats (/chat*, /chats)
   core/
     deps.py                 # HTTPBearer → JWT → firebase_uid (Firebase Auth uid string)
     jwt_tokens.py           # Mint / verify access tokens (FAMBOT_JWT_SECRET)
@@ -100,7 +100,7 @@ Production on **Render** is documented in **[`README.md`](README.md)** (Firebase
 | `FAMBOT_JWT_EXPIRES_SECONDS` | Access token TTL (defaults documented in `core/jwt_tokens.py` / README). |
 | `FIREBASE_WEB_API_KEY` | Required for `POST /auth/login` (Identity Toolkit). |
 | `FIREBASE_STORAGE_BUCKET` | Required for report uploads to Firebase Storage. |
-| `GEMINI_API_KEY` | Required for `POST /me/documents/analyze` (Gemini file + recommendations). |
+| `GEMINI_API_KEY` | Required for document analysis (`POST /documents` with `analyze=true`, or `POST /documents/{doc_id}/analyze`). |
 | `GEMINI_REPORT_MODEL` | Optional Gemini model override (default `gemini-2.5-flash`). |
 | `FAMBOT_CORS_ORIGINS` | Comma-separated origins; default allows `*`. |
 | `FAMBOT_FAMILY_INVITE_TTL_SECONDS` | Family invite token TTL (default 86400; clamped 60–2592000). |
