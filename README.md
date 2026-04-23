@@ -74,6 +74,25 @@ Installs the package and dependencies from `pyproject.toml`. At runtime, [`fambo
 
 ---
 
+## Tests
+
+Install dev tools (pytest, httpx) and run the default suite (fast, no live cloud calls):
+
+```bash
+uv sync --group dev
+uv run pytest
+```
+
+Default configuration excludes tests marked `external`. To run live Identity Toolkit / optional HTTP checks:
+
+```bash
+FAMBOT_RUN_EXTERNAL_TESTS=1 uv run pytest -m external
+```
+
+See [`AGENTS.md`](AGENTS.md) for markers, required env vars (`FIREBASE_WEB_API_KEY`, optional `FAMBOT_EXTERNAL_TEST_EMAIL` / `FAMBOT_EXTERNAL_TEST_PASSWORD`, `FAMBOT_EXTERNAL_HEALTH_URL`), and manual smoke checks.
+
+---
+
 ## Train the model
 
 Training compares **logistic regression**, **XGBoost** (random search), and **HistGradientBoostingClassifier** (random search), picks the best **5-fold CV ROC-AUC**, then saves the winning **full sklearn `Pipeline`** with `joblib`.

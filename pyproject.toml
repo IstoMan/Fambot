@@ -34,5 +34,21 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["fambot_backend*"]
 
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+]
+
 [tool.setuptools]
 py-modules = ["model"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "unit: pure logic, no network or cloud I/O",
+    "api: HTTP layer via TestClient; mocks or FAMBOT_SKIP_* flags",
+    "external: real network or Google APIs; requires FAMBOT_RUN_EXTERNAL_TESTS=1",
+]
+addopts = "-m 'not external'"
