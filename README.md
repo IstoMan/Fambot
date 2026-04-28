@@ -329,14 +329,9 @@ Deletes the object from Firebase Storage. **Response:** `{"status":"success","de
 
 **Auth:** `Authorization: Bearer <JWT>`.
 
-**JSON body** (`ChatCreateRequest`):
+No parameters are required.
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `chat_id` | string | no | If omitted, server generates a UUID. |
-| `title` | string | no | Defaults to `New Chat`. |
-
-Creates a Firestore chat session at `users/{uid}/chats/{chat_id}`.
+Creates a Firestore chat session at `users/{uid}/chats/{chat_id}` where `chat_id` is always a server-generated UUID and initial title is always `New chat`.
 
 ### `GET /chats`
 
@@ -356,7 +351,7 @@ Lists chat sessions for the authenticated user ordered by `last_updated` descend
 | `file` | file | no | Optional attachment for this turn. |
 | `Idempotency-Key` | header | no | Optional key to dedupe retried turn submissions. |
 
-Sends **user profile + cardiovascular risk** and recent chat history on every turn (no automatic bulk load of all stored documents). The model may use **function tools** (list stored document names, include a file by name, family risk context) and **Gemini File Search** (if the user has a `fileSearchStoreName` and indexing is enabled). **Grounding with Google Search** is not enabled on this path: the Gemini API does not allow combining built-in `google_search` with the same request’s custom function tools. The optional `file` field is for a **this-turn** attachment only. Persists user+model turns under `users/{uid}/chats/{chat_id}/messages`, updates `last_updated`, and tracks turn lifecycle state (`queued`, `streaming`, `completed`, `failed`, `cancelled`) under `users/{uid}/chats/{chat_id}/turns`.
+Sends **user profile + cardiovascular risk** and recent chat history on every turn (no automatic bulk load of all stored documents). The model may use **function tools** (list stored document names, include a file by name, family risk context) and **Gemini File Search** (if the user has a `fileSearchStoreName` and indexing is enabled). **Grounding with Google Search** is not enabled on this path: the Gemini API does not allow combining built-in `google_search` with the same request’s custom function tools. The optional `file` field is for a **this-turn** attachment only. Persists user+model turns under `users/{uid}/chats/{chat_id}/messages`, updates `last_updated`, and tracks turn lifecycle state (`queued`, `streaming`, `completed`, `failed`, `cancelled`) under `users/{uid}/chats/{chat_id}/turns`. After the first user message only, chat title is auto-generated with a low-cost title model.
 
 **Response negotiation (`Accept` header):**
 

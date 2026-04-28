@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -11,7 +12,6 @@ from fastapi.responses import StreamingResponse
 from fambot_backend.core.chat_orchestrator import ChatOrchestrator
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import (
-    ChatCreateRequest,
     ChatInteractionResponse,
     ChatMessageResponse,
     ChatResponse,
@@ -29,14 +29,13 @@ _orchestrator = ChatOrchestrator()
 
 @router.post("/chat/new", response_model=ChatResponse)
 def create_chat_session(
-    body: ChatCreateRequest,
     uid: str = Depends(firebase_uid),
 ) -> ChatResponse:
-    chat_id = body.chat_id or str(uuid.uuid4())
-    payload = create_chat(uid, chat_id=chat_id, title=body.title)
+    chat_id = str(uuid.uuid4())
+    payload = create_chat(uid, chat_id=chat_id)
     return ChatResponse(
         id=chat_id,
-        title=str(payload.get("title") or "New Chat"),
+        title=str(payload.get("title") or "New chat"),
         created_at=_as_dt(payload.get("created_at")),
         last_updated=_as_dt(payload.get("last_updated")),
     )
@@ -51,7 +50,7 @@ def list_chats(uid: str = Depends(firebase_uid)) -> list[ChatResponse]:
         out.append(
             ChatResponse(
                 id=str(item.get("id") or ""),
-                title=str(item.get("title") or "New Chat"),
+                title=str(item.get("title") or "New chat"),
                 created_at=_as_dt(item.get("created_at"), now),
                 last_updated=_as_dt(item.get("last_updated"), now),
             )
@@ -61,7 +60,7 @@ def list_chats(uid: str = Depends(firebase_uid)) -> list[ChatResponse]:
 
 @router.post("/v1/chats/{chat_id}/messages", response_model=ChatMessageResponse)
 def create_chat_message_v1(
-    chat_id: str,
+    chat_id: UUID,
     request: Request,
     message: str = Form(...),
     file: UploadFile | None = File(None),
@@ -90,7 +89,7 @@ def create_chat_message_v1(
         )
     return _orchestrator.run_buffered(
         uid=uid,
-        chat_id=chat_id,
+        chat_id=str(chat_id),
         user_message=message,
         upload_name=file_name,
         upload_content_type=file_content_type,
@@ -101,7 +100,7 @@ def create_chat_message_v1(
 
 @router.post("/chat/{chat_id}", response_model=ChatInteractionResponse, deprecated=True)
 def chat_interaction(
-    chat_id: str,
+    chat_id: UUID,
     message: str = Form(...),
     file: UploadFile | None = File(None),
     uid: str = Depends(firebase_uid),
@@ -109,7 +108,7 @@ def chat_interaction(
     file_name, file_content_type, file_payload = _read_upload(file)
     response = _orchestrator.run_buffered(
         uid=uid,
-        chat_id=chat_id,
+        chat_id=str(chat_id),
         user_message=message,
         upload_name=file_name,
         upload_content_type=file_content_type,
@@ -126,7 +125,7 @@ def chat_interaction(
 
 @router.post("/chat/{chat_id}/stream", deprecated=True)
 def chat_interaction_stream(
-    chat_id: str,
+    chat_id: UUID,
     message: str = Form(...),
     file: UploadFile | None = File(None),
     uid: str = Depends(firebase_uid),
@@ -135,7 +134,7 @@ def chat_interaction_stream(
 
     return StreamingResponse(
         _legacy_streaming_sse(
-            chat_id=chat_id,
+            chat_id=str(chat_id),
             uid=uid,
             message=message,
             file_name=file_name,
@@ -151,8 +150,8 @@ def chat_interaction_stream(
 
 
 @router.get("/chat/{chat_id}/history", response_model=list[MessageResponse])
-def get_history(chat_id: str, uid: str = Depends(firebase_uid)) -> list[MessageResponse]:
-    payloads = list_chat_messages(uid, chat_id)
+def get_history(chat_id: UUID, uid: str = Depends(firebase_uid)) -> list[MessageResponse]:
+    payloads = list_chat_messages(uid, str(chat_id))
     now = datetime.now(timezone.utc)
     out: list[MessageResponse] = []
     for item in payloads:
