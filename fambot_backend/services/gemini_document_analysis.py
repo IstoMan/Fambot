@@ -448,6 +448,10 @@ def _model_name() -> str:
     return os.environ.get("GEMINI_REPORT_MODEL", "gemini-2.5-flash")
 
 
+def _chat_title_model_name() -> str:
+    return os.environ.get("GEMINI_CHAT_TITLE_MODEL", "gemini-2.5-flash-lite")
+
+
 def maybe_new_chat_title(
     *, user_message: str, history: list[dict[str, Any]] | None = None
 ) -> str | None:
@@ -455,7 +459,7 @@ def maybe_new_chat_title(
     if any(str(row.get("role")) == "user" for row in history):
         return None
     client = _get_client()
-    model_name = _model_name()
+    model_name = _chat_title_model_name()
     try:
         title_response = client.models.generate_content(
             model=model_name,

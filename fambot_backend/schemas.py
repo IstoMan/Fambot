@@ -188,11 +188,6 @@ class RemoveFamilyMemberOut(BaseModel):
     group_id: str
 
 
-class ChatCreateRequest(BaseModel):
-    chat_id: str | None = None
-    title: str | None = "New Chat"
-
-
 class MessageResponse(BaseModel):
     role: str
     content: str

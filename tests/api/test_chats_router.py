@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from uuid import UUID
 from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -22,17 +23,18 @@ def test_create_chat_session(
 ) -> None:
     now = datetime.now(timezone.utc)
     create_chat.return_value = {
-        "id": "chat-1",
-        "title": "My Chat",
+        "title": "New chat",
         "created_at": now,
         "last_updated": now,
     }
-    r = client.post("/chat/new", json={"chat_id": "chat-1", "title": "My Chat"})
+    r = client.post("/chat/new")
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["id"] == "chat-1"
-    assert data["title"] == "My Chat"
+    UUID(data["id"])
+    assert data["title"] == "New chat"
     create_chat.assert_called_once()
+    assert "title" not in create_chat.call_args.kwargs
+    UUID(create_chat.call_args.kwargs["chat_id"])
 
 
 @pytest.mark.api
@@ -63,11 +65,8 @@ def test_chat_interaction_not_found(
         "fambot_backend.api.routers.chats._orchestrator.run_buffered",
         side_effect=HTTPException(status_code=404, detail="Chat not found"),
     ):
-        r = client.post(
-            "/chat/missing",
-            data={"message": "hello"},
-        )
-    assert r.status_code == 404
+        r = client.post("/chat/not-a-uuid", data={"message": "hello"})
+    assert r.status_code == 422
 
 
 @pytest.mark.api
@@ -87,7 +86,7 @@ def test_chat_interaction_success(
         ),
     ) as run_buffered:
         r = client.post(
-            "/chat/c1",
+            "/chat/00000000-0000-0000-0000-0000000000c1",
             data={"message": "hello there"},
         )
     assert r.status_code == 200, r.text
@@ -116,7 +115,7 @@ def test_chat_interaction_with_file(
         ),
     ) as run_buffered:
         r = client.post(
-            "/chat/c2",
+            "/chat/00000000-0000-0000-0000-0000000000c2",
             data={"message": "see file"},
             files={"file": ("note.txt", BytesIO(b"data"), "text/plain")},
         )
@@ -143,7 +142,10 @@ def test_chat_message_v1_json(
             state=ChatTurnState.COMPLETED,
         ),
     ):
-        r = client.post("/v1/chats/c9/messages", data={"message": "hi"})
+        r = client.post(
+            "/v1/chats/00000000-0000-0000-0000-0000000000c9/messages",
+            data={"message": "hi"},
+        )
     assert r.status_code == 200, r.text
     payload = r.json()
     assert payload["chat_id"] == "c9"
@@ -162,7 +164,7 @@ def test_get_chat_history(
     list_messages.return_value = [
         {"role": "user", "content": "a", "created_at": now, "has_file": False},
     ]
-    r = client.get("/chat/c3/history")
+    r = client.get("/chat/00000000-0000-0000-0000-0000000000c3/history")
     assert r.status_code == 200
     rows = r.json()
     assert len(rows) == 1

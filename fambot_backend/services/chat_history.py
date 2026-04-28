@@ -22,7 +22,7 @@ def create_chat(uid: str, chat_id: str, title: str | None = None) -> dict[str, A
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "id": chat_id,
-        "title": title or "New Chat",
+        "title": title or "New chat",
         "created_at": now,
         "last_updated": now,
         "user_id": uid,

@@ -31,7 +31,7 @@ def test_chat_stream_returns_sse_text_and_done(
         ),
     ]
     with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
-        r = client.post("/chat/c1/stream", data={"message": "hi"})
+        r = client.post("/chat/00000000-0000-0000-0000-0000000000c1/stream", data={"message": "hi"})
 
     assert r.status_code == 200
     assert r.headers.get("content-type", "").startswith("text/event-stream")
@@ -53,7 +53,7 @@ def test_chat_stream_error_event(
         StreamEvent(payload={"type": "error", "chatId": "c1", "turnId": "t1", "sequence": 2, "timestamp": "now", "detail": "broken"}),
     ]
     with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
-        r = client.post("/chat/c1/stream", data={"message": "hi"})
+        r = client.post("/chat/00000000-0000-0000-0000-0000000000c1/stream", data={"message": "hi"})
     assert r.status_code == 200
     assert '"type": "error"' in r.text
     assert "broken" in r.text
@@ -72,7 +72,7 @@ def test_chat_message_v1_stream_contract(
     ]
     with patch("fambot_backend.api.routers.chats._orchestrator.run_stream", return_value=iter(events)):
         r = client.post(
-            "/v1/chats/c5/messages",
+            "/v1/chats/00000000-0000-0000-0000-0000000000c5/messages",
             data={"message": "hello"},
             headers={"Accept": "text/event-stream"},
         )

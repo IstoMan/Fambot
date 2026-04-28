@@ -107,6 +107,30 @@ def test_generate_chat_turn_empty_response_uses_fallback(
 
 
 @pytest.mark.unit
+@patch("fambot_backend.services.gemini_document_analysis._get_client")
+def test_maybe_new_chat_title_uses_dedicated_title_model(get_client: MagicMock) -> None:
+    gen = MagicMock()
+    gen.models.generate_content.return_value = SimpleNamespace(text="Heart Health")
+    get_client.return_value = gen
+
+    with patch.dict("os.environ", {"GEMINI_CHAT_TITLE_MODEL": "gemini-2.5-flash-lite"}, clear=False):
+        out = gda.maybe_new_chat_title(user_message="How do I reduce risk?", history=[])
+    assert out == "Heart Health"
+    assert gen.models.generate_content.call_args.kwargs["model"] == "gemini-2.5-flash-lite"
+
+
+@pytest.mark.unit
+@patch("fambot_backend.services.gemini_document_analysis._get_client")
+def test_maybe_new_chat_title_skips_after_first_user_message(get_client: MagicMock) -> None:
+    out = gda.maybe_new_chat_title(
+        user_message="follow-up",
+        history=[{"role": "user", "content": "first message"}],
+    )
+    assert out is None
+    get_client.assert_not_called()
+
+
+@pytest.mark.unit
 @patch("fambot_backend.services.gemini_document_analysis.get_user_profile")
 @patch("fambot_backend.services.gemini_document_analysis._upload_bytes")
 @patch("fambot_backend.services.gemini_document_analysis._get_client")
