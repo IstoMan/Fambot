@@ -34,9 +34,9 @@ CHAT_SYSTEM_INSTRUCTION = dedent(
       name, and/or fetch family **risk** context. When **File Search** is available (your tools),
       you can also retrieve from indexed user documents. Do not claim you have document contents
       you have not retrieved.
-    - If **Google Search (web)** is enabled, you may use it for up-to-date, evidence-informed
-      lifestyle and public health context; it does not replace a clinician. Still align with
-      the user’s stored risk and profile.
+    - Rely on **USER_PROFILE_AND_RISK**, your function tools, and **File Search** when available;
+      you do not have live web search in this chat path. Still align with evidence-based general
+      guidance and the user’s stored risk and profile.
     - End substantive answers with a short disclaimer that this is educational, not a diagnosis,
       and is not a substitute for emergency or professional care.
     """
@@ -249,8 +249,9 @@ def _build_tools_list(uid: str) -> list[Any]:
     from google.genai import types
 
     out: list[Any] = []
-    if os.environ.get("FAMBOT_GEMINI_DISABLE_GOOGLE_SEARCH", "").strip() != "1":
-        out.append(types.Tool(google_search=types.GoogleSearch()))
+    # Gemini rejects the same request mixing built-in `google_search` with custom
+    # `function_declarations` (400 INVALID_ARGUMENT). Chat always registers the
+    # latter for documents/family tools, so web grounding is not attached here.
     store = get_file_search_store_name(uid)
     if store and not file_search_disabled():
         out.append(
@@ -338,7 +339,7 @@ def run_chat_text_and_citations(
     upload_content_type: str | None,
     upload_payload: bytes | None,
 ) -> tuple[str, str, list[dict[str, Any]] | None]:
-    """Run one chat turn (tools, web + file search, function calls). Public for SSE handler."""
+    """Run one chat turn (optional File Search + function tools). Public for SSE handler."""
     return _run_chat_tool_loop(
         uid=uid,
         user_message=user_message,

@@ -59,6 +59,7 @@ class _FakeGenaiClient:
 
 
 @pytest.mark.unit
+@patch("fambot_backend.services.gemini_document_analysis.get_file_search_store_name", return_value=None)
 @patch("fambot_backend.services.gemini_document_analysis.get_user_profile")
 @patch("fambot_backend.services.gemini_document_analysis.list_user_documents", return_value=[])
 @patch("fambot_backend.services.gemini_document_analysis._get_client")
@@ -68,6 +69,7 @@ def test_generate_chat_turn_returns_content_and_calls_model(
     get_client: MagicMock,
     _list_docs: MagicMock,
     get_profile: MagicMock,
+    _fs_store: MagicMock,
 ) -> None:
     get_profile.return_value = UserProfileOut(uid="u1", age=40, onboarding_complete=True)
     # First call: main reply; optional second call: title when no prior user in history
@@ -83,6 +85,7 @@ def test_generate_chat_turn_returns_content_and_calls_model(
 
 
 @pytest.mark.unit
+@patch("fambot_backend.services.gemini_document_analysis.get_file_search_store_name", return_value=None)
 @patch("fambot_backend.services.gemini_document_analysis.get_user_profile")
 @patch("fambot_backend.services.gemini_document_analysis.list_user_documents", return_value=[])
 @patch("fambot_backend.services.gemini_document_analysis._get_client")
@@ -92,6 +95,7 @@ def test_generate_chat_turn_empty_response_uses_fallback(
     get_client: MagicMock,
     _list_docs: MagicMock,
     get_profile: MagicMock,
+    _fs_store: MagicMock,
 ) -> None:
     get_profile.return_value = UserProfileOut(uid="u1", onboarding_complete=False)
     get_client.return_value = _FakeGenaiClient(
