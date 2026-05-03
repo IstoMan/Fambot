@@ -24,7 +24,7 @@ This repository is both a **batch training script** (builds `cardiovascular_mode
   - Runs the ML pipeline to produce a **risk score** (0–100, from the positive-class probability) and **risk class** (`low` / `moderate` / `high`).
   - Merges the result into the user’s Firestore document.
 - **Chat sessions + history** (`POST /chat/new`, `GET /chats`, `POST /v1/chats/{chat_id}/messages`, `GET /chat/{chat_id}/history`) with Firestore-backed threads. Chat behavior stays the same (prompting, tool calls, citations, optional attachments), but transport is unified: send `Accept: application/json` for buffered responses or `Accept: text/event-stream` for SSE. SSE now emits structured events (`message_start`, `token`, `tool_call`, `tool_result`, `citation`, `message_end`, `error`) with `chatId`, `turnId`, `sequence`, and `timestamp`. Legacy `/chat/{chat_id}` and `/chat/{chat_id}/stream` routes remain deprecated shims during migration.
-- **Documents** (`GET /documents`, `POST /documents`, `GET /documents/{doc_id}`, `POST /documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`): upload/list/get/delete medical reports in Firebase Storage under `documents/{uid}/...`; optional **Gemini** analysis on upload (`multipart` form `analyze=true`) or on a stored file by id.
+- **Documents** (`GET /documents`, `POST /documents`, `GET /documents/{doc_id}`, `GET /documents/{doc_id}/download`, `POST /documents/{doc_id}/analyze`, `DELETE /documents/{doc_id}`): upload/list/get/download/delete medical reports in Firebase Storage under `documents/{uid}/...`; optional **Gemini** analysis on upload (`multipart` form `analyze=true`) or on a stored file by id.
 - **Family group (v1)** (`/me/family/…`): group owner creates **single-use** invite links (24h TTL by default) with optional deep-link base URL; response includes **QR code** as base64 PNG. Invitees (existing accounts) **accept** while authenticated; reciprocal relationship labels use a fixed vocabulary and gender-aware mapping. Owner can **remove** members. Each user belongs to **at most one** family group.
 
 ---
@@ -312,6 +312,12 @@ Lists the authenticated user’s files from Storage.
 #### `GET /documents/{doc_id}`
 
 Returns one `DocumentItem` for a user-owned object.
+
+#### `GET /documents/{doc_id}/download`
+
+Streams the **raw file bytes** for viewing or saving (same filename as stored). Response headers include `Content-Type` from storage and `Content-Disposition: attachment` with the original filename (ASCII-safe + RFC 5987 `filename*` for Unicode names).
+
+**Errors:** `404` if the object was deleted from Storage; `401` auth.
 
 #### `POST /documents/{doc_id}/analyze`
 

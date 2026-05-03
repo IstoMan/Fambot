@@ -117,6 +117,34 @@ def test_upload_with_analyze_mocked(
 
 
 @pytest.mark.api
+@patch("fambot_backend.api.routers.documents.get_user_document_payload")
+@patch("fambot_backend.api.routers.documents.get_user_document")
+def test_download_document_mocked(
+    get_doc: object,
+    get_payload: object,
+    client: TestClient,
+    dry_api_env: None,
+) -> None:
+    get_doc.return_value = {
+        "id": "report.pdf",
+        "filename": "report.pdf",
+        "content_type": "application/pdf",
+        "size": 4,
+        "storage_path": "documents/dev-user/report.pdf",
+        "storage_uri": "gs://b/documents/dev-user/report.pdf",
+        "created_at": None,
+    }
+    get_payload.return_value = b"%PDF"
+    r = client.get("/documents/report.pdf/download")
+    assert r.status_code == 200, r.text
+    assert r.content == b"%PDF"
+    assert r.headers.get("content-type", "").startswith("application/pdf")
+    assert "attachment" in (r.headers.get("content-disposition") or "")
+    assert "report.pdf" in (r.headers.get("content-disposition") or "")
+    get_payload.assert_called_once_with("documents/dev-user/report.pdf")
+
+
+@pytest.mark.api
 @patch("fambot_backend.api.routers.documents.analyze_stored_document")
 def test_analyze_stored_document_mocked(
     analyze: object,

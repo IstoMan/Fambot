@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 
 from fambot_backend.core.deps import firebase_uid
 from fambot_backend.schemas import DocumentAnalysisResult, DocumentItem, DocumentType
 from fambot_backend.services.document_storage import (
     delete_user_document,
     get_user_document,
+    get_user_document_payload,
     list_user_documents,
     upload_user_document,
 )
@@ -19,6 +22,20 @@ from fambot_backend.services.gemini_document_analysis import (
 from fambot_backend.services.gemini_file_search import ingest_bytes_to_file_search
 
 router = APIRouter(tags=["documents"])
+
+
+def _attachment_content_disposition(filename: str) -> str:
+    """RFC 5987 Content-Disposition for UTF-8 filenames."""
+    safe = filename.replace("\\", "\\\\").replace('"', '\\"')
+    try:
+        safe.encode("ascii")
+        return f'attachment; filename="{safe}"'
+    except UnicodeEncodeError:
+        ascii_fallback = (filename.encode("ascii", "ignore").decode("ascii") or "download").strip() or "download"
+        if not Path(ascii_fallback).suffix and (suf := Path(filename).suffix):
+            ascii_fallback = ascii_fallback + suf
+        encoded = quote(filename, safe="")
+        return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _document_from_list_row(row: dict) -> DocumentItem:
@@ -107,6 +124,23 @@ def upload_document(
 @router.get("/documents/{doc_id}", response_model=DocumentItem)
 def get_document(doc_id: str, uid: str = Depends(firebase_uid)) -> DocumentItem:
     return _document_from_get_row(get_user_document(uid, doc_id))
+
+
+@router.get("/documents/{doc_id}/download")
+def download_document(doc_id: str, uid: str = Depends(firebase_uid)) -> Response:
+    """Stream the raw file bytes so the client can open or save the uploaded document."""
+    doc = get_user_document(uid, doc_id)
+    storage_path = doc.get("storage_path")
+    if not isinstance(storage_path, str) or not storage_path:
+        raise HTTPException(status_code=500, detail="Document storage path missing")
+    payload = get_user_document_payload(storage_path)
+    media_type = str(doc.get("content_type") or "application/octet-stream")
+    filename = str(doc.get("filename") or doc_id)
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": _attachment_content_disposition(filename)},
+    )
 
 
 @router.post("/documents/{doc_id}/analyze", response_model=DocumentAnalysisResult)
